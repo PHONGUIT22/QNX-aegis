@@ -1,0 +1,76 @@
+# Build Artifacts & Binaries
+*.o
+*.obj
+*.so
+*.a
+*.sym
+*.bin
+*.out
+*.map
+*.log
+scratch*
+build/
+dist/
+bin/
+
+# QNX C compilation artifacts
+qnx-target/bin/
+qnx-target/**/build/
+qnx-target/**/*.o
+qnx-target/inspector-daemon/qnx_inspector
+qnx-target/demos/ipc_deadlock_demo
+qnx-target/demos/ipc_healthy_demo
+qnx-target/demos/slog2_crash_demo
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environment Variables & Secrets
+.env
+.env.local
+*.pem
+*.key
+id_rsa
+id_ed25519
+
+# Node / Web Dashboard
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# IDE & OS Files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
