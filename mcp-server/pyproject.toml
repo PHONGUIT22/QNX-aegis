@@ -1,0 +1,25 @@
+[project]
+name = "qnx-aegis-mcp"
+version = "1.0.0"
+description = "Model Context Protocol (MCP) Server & Telemetry Bridge for QNX Neutrino RTOS 8.0"
+authors = [
+    { name = "QNX-Aegis Team", email = "hackathon@qnx-aegis.dev" }
+]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=1.2.0",
+    "paramiko>=3.4.0",
+    "scp>=0.15.0",
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.28.0",
+    "pydantic>=2.6.0",
+    "pydantic-settings>=2.2.0",
+    "python-dotenv>=1.0.1",
+    "websockets>=12.0",
+    "networkx>=3.2",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
