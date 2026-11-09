@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>QNX-Aegis | Real-Time Microkernel & MCP Studio</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Cytoscape.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.28.1/cytoscape.min.js"></script>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col">
+
+  <!-- Top Navigation Bar -->
+  <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur px-6 py-4 flex flex-wrap items-center justify-between gap-4 sticky top-0 z-50">
+    <div class="flex items-center gap-3">
+      <div class="w-9 h-9 rounded-lg bg-cyan-500/20 border border-cyan-500/40 flex items-center justify-center text-cyan-400 font-black text-xl">
+        Ω
+      </div>
+      <div>
+        <h1 class="text-lg font-bold tracking-tight text-white flex items-center gap-2">
+          QNX-Aegis <span class="text-xs px-2 py-0.5 rounded bg-cyan-950 text-cyan-400 border border-cyan-800 font-mono">v1.0.0</span>
+        </h1>
+        <p class="text-xs text-slate-400">AI Agent & Real-Time Microkernel Bridge for QNX SDP 8.0</p>
+      </div>
+    </div>
+
+    <!-- Live Telemetry Badges & Controls -->
+    <div class="flex items-center gap-3">
+      <button id="btn-start-qemu" class="px-3.5 py-1.5 rounded-full text-xs font-bold bg-cyan-600 hover:bg-cyan-500 text-white transition flex items-center gap-1.5 shadow-md shadow-cyan-950 disabled:opacity-50">
+        <span id="btn-start-qemu-icon">🚀</span>
+        <span id="btn-start-qemu-text">Start QNX 8.0 QEMU VM</span>
+      </button>
+
+      <div id="target-badge" class="px-3 py-1 rounded-full text-xs font-medium bg-slate-800 text-slate-300 border border-slate-700 flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-slate-500"></span>
+        <span>Target: Checking...</span>
+      </div>
+
+      <div id="connection-badge" class="px-3 py-1 rounded-full text-xs font-medium bg-emerald-950 text-emerald-400 border border-emerald-800 flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+        <span id="connection-status-text">QEMU SSH: Active</span>
+      </div>
+
+      <div id="deadlock-badge" class="px-3 py-1 rounded-full text-xs font-bold bg-slate-800 text-slate-400 border border-slate-700 flex items-center gap-2">
+        <span id="deadlock-dot" class="w-2 h-2 rounded-full bg-slate-500"></span>
+        <span id="deadlock-status-text">IPC: Nominal</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content Layout -->
+  <main class="flex-1 p-6 max-w-7xl w-full mx-auto flex flex-col gap-6">
+
+    <!-- KPI Metrics Cards -->
+    <section class="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col justify-between">
+        <span class="text-xs text-slate-400 font-medium">MICROKERNEL TARGET</span>
+        <div class="mt-2">
+          <div id="metric-os" class="text-lg font-bold text-white">QNX Neutrino 8.0</div>
+          <div id="metric-uptime" class="text-xs text-cyan-400 mt-1 font-mono">Uptime: 0s</div>
+        </div>
+      </div>
+
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col justify-between">
+        <span class="text-xs text-slate-400 font-medium">PROCESS & THREADS</span>
+        <div class="mt-2 flex items-baseline gap-2">
+          <span id="metric-threads" class="text-2xl font-black text-white">0</span>
+          <span class="text-xs text-slate-400">Threads across</span>
+          <span id="metric-procs" class="text-lg font-bold text-cyan-400">0</span>
+          <span class="text-xs text-slate-400">Processes</span>
+        </div>
+      </div>
+
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col justify-between">
+        <span class="text-xs text-slate-400 font-medium">IPC STATE BREAKDOWN</span>
+        <div class="mt-2 flex items-center gap-1.5 flex-wrap text-xs font-mono">
+          <span class="px-1.5 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800">RUN: <b id="cnt-run">0</b></span>
+          <span class="px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-400 border border-cyan-800">RCV: <b id="cnt-rcv">0</b></span>
+          <span class="px-1.5 py-0.5 rounded bg-amber-950 text-amber-400 border border-amber-800">SND: <b id="cnt-snd">0</b></span>
+          <span class="px-1.5 py-0.5 rounded bg-rose-950 text-rose-400 border border-rose-800">RPL: <b id="cnt-rpl">0</b></span>
+        </div>
+      </div>
+
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col justify-between">
+        <span class="text-xs text-slate-400 font-medium">MCP AI AGENT STUDIO</span>
+        <div class="mt-2 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <span class="w-2.5 h-2.5 rounded-full bg-purple-400 animate-pulse"></span>
+            <span class="text-sm font-semibold text-purple-300">FastMCP Ready</span>
+          </div>
+          <span class="text-xs px-2 py-0.5 rounded bg-purple-950 text-purple-400 border border-purple-800 font-mono">6 Tools</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Interactive Control Action Toolbar -->
+    <section class="bg-slate-900 border border-slate-800 rounded-xl p-3 flex flex-wrap items-center justify-between gap-3">
+      <div class="flex items-center gap-2 flex-wrap">
+        <button id="btn-trigger-deadlock" class="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-rose-600 hover:bg-rose-500 text-white transition flex items-center gap-1.5 shadow-lg shadow-rose-900/30">
+          <span>⚡ Simulate IPC Deadlock</span>
+        </button>
+        <button id="btn-trigger-healthy" class="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition flex items-center gap-1.5">
+          <span>✔ Run Healthy IPC Demo</span>
+        </button>
+        <button id="btn-trigger-crash" class="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-amber-600 hover:bg-amber-500 text-white transition flex items-center gap-1.5">
+          <span>⚠ Slog2 Crash Demo</span>
+        </button>
+        <button id="btn-run-detective" class="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-purple-600 hover:bg-purple-500 text-white transition flex items-center gap-1.5">
+          <span>🔍 Run Deadlock Detective</span>
+        </button>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <button id="btn-reset-layout" class="px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-300 transition">
+          Reset Layout
+        </button>
+        <button id="btn-poll-refresh" class="px-3 py-1.5 rounded-lg text-xs font-medium bg-cyan-900 hover:bg-cyan-800 text-cyan-200 transition">
+          Sync Now
+        </button>
+      </div>
+    </section>
+
+    <!-- Main Central Grid: Cytoscape Graph & Telemetry Columns -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 flex-1">
+
+      <!-- Left Column: Cytoscape IPC Graph (7 cols) -->
+      <section class="lg:col-span-7 flex flex-col gap-4">
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col flex-1">
+          <div class="flex items-center justify-between mb-3">
+            <div class="flex items-center gap-2">
+              <h2 class="text-sm font-bold text-white tracking-wide uppercase">Microkernel IPC Message Passing Graph</h2>
+              <span class="text-xs text-slate-500">(Cytoscape.js)</span>
+            </div>
+            <!-- Legend -->
+            <div class="flex items-center gap-2 text-[10px] font-mono">
+              <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-emerald-400"></span>RUN/RDY</span>
+              <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-cyan-400"></span>RECEIVE</span>
+              <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-amber-400"></span>SEND</span>
+              <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-rose-500"></span>REPLY</span>
+            </div>
+          </div>
+
+          <!-- Cytoscape Canvas Container -->
+          <div id="cy-container" class="flex-1 min-h-[460px] rounded-lg border border-slate-800 relative overflow-hidden">
+            <!-- Offline state banner overlay -->
+            <div id="cy-offline-overlay" class="hidden absolute inset-0 bg-slate-950/90 backdrop-blur-sm z-10 flex flex-col items-center justify-center p-6 text-center">
+              <div class="w-16 h-16 rounded-2xl bg-rose-950/40 border border-rose-800 flex items-center justify-center text-rose-400 text-2xl mb-4 font-mono shadow-lg shadow-rose-950/50">
+                ⚡
+              </div>
+              <h3 class="text-base font-bold text-white mb-2">QNX Neutrino RTOS 8.0 Target Offline</h3>
+              <p class="text-xs text-slate-400 max-w-md mb-6 leading-relaxed">
+                The QEMU virtual machine running QNX SDP 8.0 (x86_64) is currently stopped. Launch the VM to stream live microkernel IPC thread states and inspect native message passing.
+              </p>
+              <button id="btn-start-qemu-overlay" class="px-5 py-2.5 rounded-lg text-xs font-bold bg-cyan-600 hover:bg-cyan-500 text-white transition flex items-center gap-2 shadow-lg shadow-cyan-900/40 disabled:opacity-50">
+                <span>🚀 Boot QNX 8.0 QEMU VM</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Selected Node Details Drawer -->
+          <div id="node-inspector" class="mt-3 p-3 bg-slate-950/80 border border-slate-800 rounded-lg text-xs flex flex-wrap items-center justify-between gap-4">
+            <div class="flex items-center gap-3">
+              <span class="text-slate-400">Selected Entity:</span>
+              <span id="inspect-title" class="font-bold text-cyan-400">Click a node on the graph</span>
+            </div>
+            <div id="inspect-details" class="flex items-center gap-4 text-slate-300 font-mono text-[11px]">
+              <span>PID: -</span>
+              <span>TID: -</span>
+              <span>State: -</span>
+              <span>Channel: -</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Right Column: Deadlock Alert & Slog2 Stream (5 cols) -->
+      <section class="lg:col-span-5 flex flex-col gap-4">
+
+        <!-- Deadlock Detective AI Advisory Box -->
+        <div id="deadlock-panel" class="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col transition-all">
+          <div class="flex items-center justify-between mb-2">
+            <div class="flex items-center gap-2">
+              <span id="deadlock-panel-icon" class="text-base">🛡</span>
+              <h2 class="text-sm font-bold text-white tracking-wide uppercase">Deadlock Detective Diagnostic</h2>
+            </div>
+            <span id="deadlock-panel-tag" class="text-[10px] px-2 py-0.5 rounded font-mono bg-slate-800 text-slate-400">STATUS: CLEAN</span>
+          </div>
+
+          <div id="deadlock-details" class="text-xs text-slate-300 space-y-2 mt-1">
+            <p class="text-slate-400">No circular waits detected in the QNX message-passing pipeline.</p>
+          </div>
+
+          <!-- AI Remediation Box -->
+          <div id="ai-remediation-box" class="hidden mt-3 p-3 rounded-lg bg-rose-950/30 border border-rose-800/60 text-xs">
+            <div class="font-bold text-rose-400 mb-1 flex items-center gap-1.5">
+              <span>🤖 AI Agent Recommended Action:</span>
+            </div>
+            <div id="ai-remediation-text" class="text-slate-300 whitespace-pre-wrap font-mono text-[11px] leading-relaxed"></div>
+          </div>
+        </div>
+
+        <!-- Live slog2 System Log Console -->
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col flex-1">
+          <div class="flex items-center justify-between mb-2">
+            <div class="flex items-center gap-2">
+              <span class="text-xs font-bold text-white tracking-wide uppercase">QNX slog2 Live Stream</span>
+              <span class="text-[10px] text-slate-500 font-mono">(slog2info)</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <button id="btn-clear-logs" class="text-[11px] text-slate-400 hover:text-slate-200">Clear</button>
+            </div>
+          </div>
+
+          <div id="slog2-console" class="terminal-window flex-1">
+            <div class="terminal-line info">[slog2] Connecting to QNX 8.0 telemetry stream...</div>
+          </div>
+        </div>
+
+      </section>
+    </div>
+
+  </main>
+
+  <!-- Footer -->
+  <footer class="border-t border-slate-800 bg-slate-900/60 px-6 py-3 text-xs text-slate-500 flex flex-wrap items-center justify-between gap-2">
+    <div>
+      QNX-Aegis &copy; 2026. Built for the <strong class="text-slate-400">QNX Global Hackathon</strong> (Track 4: Developer Tooling).
+    </div>
+    <div class="flex items-center gap-4 text-[11px]">
+      <a href="https://github.com" target="_blank" class="hover:text-cyan-400 transition">GitHub Repo</a>
+      <span>•</span>
+      <a href="https://modelcontextprotocol.io" target="_blank" class="hover:text-cyan-400 transition">Model Context Protocol</a>
+      <span>•</span>
+      <span class="font-mono text-cyan-400">Target: QNX Neutrino 8.0 (x86_64)</span>
+    </div>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
