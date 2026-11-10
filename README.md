@@ -66,17 +66,17 @@ flowchart TB
     end
 
     %% Communications
-    LLM <-->|Model Context Protocol (MCP)| Server
+    LLM <-->|"Model Context Protocol (MCP)"| Server
     Server --> Compiler
     Server --> Detective
     Server <--> Paramiko
-    Bridge <-->|WebSocket State Stream| Dashboard
+    Bridge <-->|"WebSocket State Stream"| Dashboard
 
-    Paramiko <-->|SSH / SCP (Port 2222)| Target
-    ResMgr <-->|devctl / procfs| ProcFS
-    ResMgr <-->|slog2 API| Slog2Buffer
-    DemoApp <-->|Sync IPC Channels| IPC
-    Paramiko -->|Read JSON| ResMgr
+    Paramiko <-->|"SSH / SCP (Port 2222)"| Target
+    ResMgr <-->|"devctl / procfs"| ProcFS
+    ResMgr <-->|"slog2 API"| Slog2Buffer
+    DemoApp <-->|"Sync IPC Channels"| IPC
+    Paramiko -->|"Read JSON"| ResMgr
 ```
 
 ---

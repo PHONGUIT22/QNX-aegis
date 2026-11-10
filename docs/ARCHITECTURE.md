@@ -31,11 +31,11 @@ graph TD
         Intr["Interrupt Handlers"]
     end
 
-    App1 <-->|MsgSend / MsgReply| ResMgr
-    ResMgr <-->|devctl /proc| ProcMgr
-    App1 -->|slog2fa()| Slog2
-    ResMgr -->|Kernel IPC| IPC
-    ProcMgr -->|Kernel IPC| IPC
+    App1 <-->|"MsgSend / MsgReply"| ResMgr
+    ResMgr <-->|"devctl /proc"| ProcMgr
+    App1 -->|"slog2fa()"| Slog2
+    ResMgr -->|"Kernel IPC"| IPC
+    ProcMgr -->|"Kernel IPC"| IPC
 ```
 
 ---
