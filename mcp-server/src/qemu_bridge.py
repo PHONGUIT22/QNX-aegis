@@ -266,19 +266,30 @@ class QemuBridge:
         if not bin_dir.exists():
             return False, f"Local target bin directory not found: {bin_dir}"
 
-        expected_bins = ["qnx_inspector", "ipc_deadlock_demo", "ipc_healthy_demo", "slog2_crash_demo"]
+        expected_bins = [
+            "qnx_inspector",
+            "ipc_deadlock_demo",
+            "ipc_healthy_demo",
+            "slog2_crash_demo",
+            "ipc_benchmark_demo",
+        ]
 
         # Always ensure /data is mounted read-write
         self.execute_remote(f"echo {self.password} | sudo -S mount -u -o rw /data 2>/dev/null", timeout=3)
 
-        # 1. Check if qnx_inspector binary exists in deploy directory
-        code, _, _ = self.execute_remote(f"test -x {self.deploy_dir}/qnx_inspector", timeout=3)
-        if code != 0:
-            logger.info(f"Target binaries missing in {self.deploy_dir}. Auto-provisioning from {bin_dir}...")
+        # 1. Check if expected binaries exist in deploy directory
+        check_cmd = " ; ".join([f"test -x {self.deploy_dir}/{b} || echo {b}" for b in expected_bins])
+        _, missing_out, _ = self.execute_remote(check_cmd, timeout=4)
+        missing_bins = [line.strip() for line in missing_out.splitlines() if line.strip() in expected_bins]
+
+        if missing_bins:
+            logger.info(f"Target binaries missing in {self.deploy_dir} ({missing_bins}). Auto-provisioning from {bin_dir}...")
             self.execute_remote(f"echo {self.password} | sudo -S mkdir -p {self.deploy_dir}", timeout=3)
             self.execute_remote(f"echo {self.password} | sudo -S chmod 777 {self.deploy_dir}", timeout=3)
+            if "qnx_inspector" in missing_bins:
+                self.execute_remote(f"echo {self.password} | sudo -S slay -f qnx_inspector 2>/dev/null", timeout=3)
 
-            for b_name in expected_bins:
+            for b_name in missing_bins:
                 loc = bin_dir / b_name
                 if loc.exists():
                     ok, msg = self.upload_file(str(loc), f"{self.deploy_dir}/{b_name}")

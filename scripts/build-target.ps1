@@ -45,7 +45,7 @@ if (-not (Test-Path $BinDir)) {
 $cflags = "-V$TargetArch", "-O2", "-Wall", "-Wextra", "-D_QNX_SOURCE"
 
 # 1. Build Inspector Daemon
-Write-Host "[1/4] Compiling /dev/qnx_inspector Resource Manager..." -ForegroundColor White
+Write-Host "[1/5] Compiling /dev/qnx_inspector Resource Manager..." -ForegroundColor White
 $daemonSrc = @(
     (Join-Path $TargetDir "inspector-daemon\main.c"),
     (Join-Path $TargetDir "inspector-daemon\ipc_analyzer.c"),
@@ -65,7 +65,7 @@ if ($LASTEXITCODE -eq 0 -and (Test-Path $daemonOut)) {
 }
 
 # 2. Build Deadlock Demo
-Write-Host "[2/4] Compiling QNX IPC Deadlock Demo..." -ForegroundColor White
+Write-Host "[2/5] Compiling QNX IPC Deadlock Demo..." -ForegroundColor White
 $deadlockSrc = Join-Path $TargetDir "demos\ipc_deadlock_demo.c"
 $deadlockOut = Join-Path $BinDir "ipc_deadlock_demo"
 & qcc @($cflags + @("-o", $deadlockOut, $deadlockSrc))
@@ -77,7 +77,7 @@ if ($LASTEXITCODE -eq 0 -and (Test-Path $deadlockOut)) {
 }
 
 # 3. Build Healthy IPC Demo
-Write-Host "[3/4] Compiling QNX Healthy IPC Demo..." -ForegroundColor White
+Write-Host "[3/5] Compiling QNX Healthy IPC Demo..." -ForegroundColor White
 $healthySrc = Join-Path $TargetDir "demos\ipc_healthy_demo.c"
 $healthyOut = Join-Path $BinDir "ipc_healthy_demo"
 & qcc @($cflags + @("-o", $healthyOut, $healthySrc))
@@ -89,7 +89,7 @@ if ($LASTEXITCODE -eq 0 -and (Test-Path $healthyOut)) {
 }
 
 # 4. Build Slog2 Crash Demo
-Write-Host "[4/4] Compiling Slog2 Logging & Crash Demo..." -ForegroundColor White
+Write-Host "[4/5] Compiling Slog2 Logging & Crash Demo..." -ForegroundColor White
 $slogSrc = Join-Path $TargetDir "demos\slog2_crash_demo.c"
 $slogOut = Join-Path $BinDir "slog2_crash_demo"
 & qcc @($cflags + @("-lslog2", "-o", $slogOut, $slogSrc))
@@ -97,6 +97,18 @@ if ($LASTEXITCODE -eq 0 -and (Test-Path $slogOut)) {
     Write-Host "     [OK] Built: $slogOut" -ForegroundColor Green
 } else {
     Write-Host "     [FAIL] Failed to build $slogOut" -ForegroundColor Red
+    exit $LASTEXITCODE
+}
+
+# 5. Build IPC Hardware Benchmark Demo
+Write-Host "[5/5] Compiling QNX IPC ClockCycles Benchmark Demo..." -ForegroundColor White
+$benchSrc = Join-Path $TargetDir "demos\ipc_benchmark_demo.c"
+$benchOut = Join-Path $BinDir "ipc_benchmark_demo"
+& qcc @($cflags + @("-lslog2", "-o", $benchOut, $benchSrc))
+if ($LASTEXITCODE -eq 0 -and (Test-Path $benchOut)) {
+    Write-Host "     [OK] Built: $benchOut" -ForegroundColor Green
+} else {
+    Write-Host "     [FAIL] Failed to build $benchOut" -ForegroundColor Red
     exit $LASTEXITCODE
 }
 

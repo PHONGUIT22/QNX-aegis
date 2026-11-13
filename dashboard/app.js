@@ -1,570 +1,1261 @@
 /**
- * ==============================================================================
- * QNX-Aegis: Real-Time Dashboard Client Engine
- * File: app.js
- * Purpose: Manages WebSocket telemetry stream, interactive Cytoscape.js IPC graph,
- *          deadlock cycle visual highlights, slog2 streaming, and QEMU lifecycle.
- * Strict zero-simulation policy: offline target shows clean disconnected state.
- * ==============================================================================
+ * QNX-Aegis Live Telemetry Workstation (ZOC Terminal + btop TUI)
+ * Connects strictly to real QNX 8.0 /api/telemetry, WebSocket, Detective,
+ * ClockCycles() Benchmark, QCC Hot-Patcher, and MCP JSON-RPC Studio endpoints.
  */
 
-(function () {
-  let cy = null;
-  let ws = null;
-  let lastLogs = "";
-  let isBooting = false;
-  const API_BASE = window.location.origin.startsWith("http") ? window.location.origin : "http://localhost:8000";
+const state = {
+    cy: null,
+    ws: null,
+    pollIntervalMs: 2000,
+    pollTimer: null,
+    activeHistory: new Array(60).fill(0),
+    ipcHistory: new Array(60).fill(0),
+    latestTelemetry: null,
+    latestDetective: null,
+    selectedNodeKey: null,
+    lastStructuralSig: null,
+    lastDetectiveSig: null,
+    procFilterText: '',
+    mcpTools: [],
+    selectedMcpTool: null,
+    rpcSeq: 1,
+    isBootingQemu: false,
+    detectiveInFlight: false,
+};
 
-  // Elements
-  const targetBadge = document.getElementById("target-badge");
-  const connectionBadge = document.getElementById("connection-badge");
-  const connectionText = document.getElementById("connection-status-text");
-  const deadlockBadge = document.getElementById("deadlock-badge");
-  const deadlockDot = document.getElementById("deadlock-dot");
-  const deadlockText = document.getElementById("deadlock-status-text");
+// Unicode Braille 2x4 vertical column bitmasks (left & right columns, levels 0..4)
+const BRAILLE_LEFT = [0x00, 0x40, 0x44, 0x46, 0x47];
+const BRAILLE_RIGHT = [0x00, 0x80, 0xa0, 0xb0, 0xb8];
 
-  const btnStartQemu = document.getElementById("btn-start-qemu");
-  const btnStartQemuIcon = document.getElementById("btn-start-qemu-icon");
-  const btnStartQemuText = document.getElementById("btn-start-qemu-text");
-  const btnStartOverlay = document.getElementById("btn-start-qemu-overlay");
-  const cyOfflineOverlay = document.getElementById("cy-offline-overlay");
+function $(id) {
+    return document.getElementById(id);
+}
 
-  const metricOs = document.getElementById("metric-os");
-  const metricUptime = document.getElementById("metric-uptime");
-  const metricThreads = document.getElementById("metric-threads");
-  const metricProcs = document.getElementById("metric-procs");
-  const cntRun = document.getElementById("cnt-run");
-  const cntRcv = document.getElementById("cnt-rcv");
-  const cntSnd = document.getElementById("cnt-snd");
-  const cntRpl = document.getElementById("cnt-rpl");
+function escapeHtml(text) {
+    if (text === null || text === undefined) return '';
+    return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
 
-  const deadlockPanel = document.getElementById("deadlock-panel");
-  const deadlockPanelTag = document.getElementById("deadlock-panel-tag");
-  const deadlockPanelIcon = document.getElementById("deadlock-panel-icon");
-  const deadlockDetails = document.getElementById("deadlock-details");
-  const aiBox = document.getElementById("ai-remediation-box");
-  const aiText = document.getElementById("ai-remediation-text");
-  const slogConsole = document.getElementById("slog2-console");
+function formatUptime(totalSec) {
+    const sec = Math.max(0, Math.floor(Number(totalSec) || 0));
+    const h = String(Math.floor(sec / 3600)).padStart(2, '0');
+    const m = String(Math.floor((sec % 3600) / 60)).padStart(2, '0');
+    const s = String(sec % 60).padStart(2, '0');
+    return `${h}:${m}:${s}`;
+}
 
-  const inspectTitle = document.getElementById("inspect-title");
-  const inspectDetails = document.getElementById("inspect-details");
+function formatFreq(cyclesPerSec) {
+    const hz = Number(cyclesPerSec) || 0;
+    if (hz <= 0) return '--';
+    if (hz >= 1e9) return `${(hz / 1e9).toFixed(2)} GHz`;
+    if (hz >= 1e6) return `${(hz / 1e6).toFixed(1)} MHz`;
+    return `${hz.toLocaleString()} Hz`;
+}
 
-  // Initialize Cytoscape
-  function initCytoscape() {
-    cy = cytoscape({
-      container: document.getElementById("cy-container"),
-      boxSelectionEnabled: false,
-      autounselectify: false,
-      style: [
-        {
-          selector: "node",
-          style: {
-            "content": "data(label)",
-            "text-valign": "center",
-            "text-halign": "center",
-            "color": "#ffffff",
-            "font-size": "10px",
-            "font-weight": "bold",
-            "background-color": "#334155",
-            "border-width": 2,
-            "border-color": "#475569",
-            "width": 54,
-            "height": 54,
-            "text-wrap": "wrap",
-            "text-max-width": "50px"
-          }
-        },
-        {
-          selector: "node[state = 'RUNNING'], node[state = 'READY']",
-          style: {
-            "background-color": "#065f46",
-            "border-color": "#10b981",
-            "color": "#a7f3d0"
-          }
-        },
-        {
-          selector: "node[state = 'RECEIVE']",
-          style: {
-            "background-color": "#155e75",
-            "border-color": "#06b6d4",
-            "color": "#cffafe"
-          }
-        },
-        {
-          selector: "node[state = 'SEND']",
-          style: {
-            "background-color": "#78350f",
-            "border-color": "#f59e0b",
-            "color": "#fef3c7"
-          }
-        },
-        {
-          selector: "node[state = 'REPLY']",
-          style: {
-            "background-color": "#881337",
-            "border-color": "#f43f5e",
-            "color": "#ffe4e6"
-          }
-        },
-        {
-          selector: "node[?is_deadlocked]",
-          style: {
-            "background-color": "#7f1d1d",
-            "border-color": "#ef4444",
-            "border-width": 4,
-            "shadow-blur": 15,
-            "shadow-color": "#ef4444"
-          }
-        },
-        {
-          selector: "edge",
-          style: {
-            "width": 2,
-            "line-color": "#475569",
-            "target-arrow-color": "#475569",
-            "target-arrow-shape": "triangle",
-            "curve-style": "bezier",
-            "label": "data(label)",
-            "font-size": "8px",
-            "color": "#94a3b8",
-            "text-rotation": "autorotate"
-          }
-        },
-        {
-          selector: "edge[?is_deadlock_edge]",
-          style: {
-            "width": 3,
-            "line-color": "#ef4444",
-            "target-arrow-color": "#ef4444",
-            "line-style": "dashed",
-            "color": "#fca5a5"
-          }
+function renderAsciiMeter(ratio, width = 16) {
+    const clamped = Math.max(0, Math.min(1, Number(ratio) || 0));
+    const filled = Math.round(clamped * width);
+    return '■'.repeat(filled) + '□'.repeat(width - filled);
+}
+
+function renderBrailleSparkline(samples) {
+    // Pair 60 samples into 30 dual-column Unicode Braille glyphs
+    const padded = samples.slice(-60);
+    while (padded.length < 60) padded.unshift(0);
+    let out = '';
+    for (let i = 0; i < padded.length; i += 2) {
+        const l = Math.max(0, Math.min(4, Math.round((padded[i] || 0) * 4)));
+        const r = Math.max(0, Math.min(4, Math.round((padded[i + 1] || 0) * 4)));
+        out += String.fromCharCode(0x2800 | BRAILLE_LEFT[l] | BRAILLE_RIGHT[r]);
+    }
+    return out;
+}
+
+function threadKey(t) {
+    return `${t.pid}:${t.tid}`;
+}
+
+function classifyStateGroup(rawState) {
+    const st = String(rawState || '').toUpperCase();
+    if (st.includes('RECEIVE')) return 'RCV';
+    if (st.includes('SEND')) return 'SND';
+    if (st.includes('REPLY')) return 'RPL';
+    if (st.includes('RUN') || st.includes('READY')) return 'RUN';
+    return 'OTHER';
+}
+
+function stateBadgeColor(rawState, isDeadlocked) {
+    if (isDeadlocked) return '#bf616a';
+    const st = String(rawState || '').toUpperCase();
+    if (st.includes('SEND')) return '#ebcb8b';
+    if (st.includes('RECEIVE')) return '#88c0d0';
+    if (st.includes('REPLY')) return '#b48ead';
+    if (st.includes('RUN') || st.includes('READY')) return '#a3be8c';
+    return '#81a1c1';
+}
+
+/* ============================================================================
+ * Initialization & ZOC Clock / Session Tabs
+ * ========================================================================= */
+document.addEventListener('DOMContentLoaded', () => {
+    initZocClock();
+    initCytoscape();
+    bindEventListeners();
+    fetchTelemetry();
+    connectWebSocket();
+    restartPollTimer();
+    loadMcpTools();
+});
+
+function initZocClock() {
+    const tick = () => {
+        const el = $('zoc-clock');
+        if (el) {
+            const now = new Date();
+            el.textContent = now.toTimeString().slice(0, 8);
         }
-      ],
-      elements: []
+    };
+    tick();
+    setInterval(tick, 1000);
+}
+
+function bindEventListeners() {
+    document.querySelectorAll('.zoc-tab').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            switchZocTab(btn.dataset.tab);
+        });
     });
 
-    cy.on("tap", "node", function (evt) {
-      const d = evt.target.data();
-      inspectTitle.textContent = `${d.proc_name} (TID ${d.tid})`;
-      inspectDetails.innerHTML = `
-        <span>PID: <b class="text-cyan-400">${d.pid}</b></span>
-        <span>TID: <b class="text-cyan-400">${d.tid}</b></span>
-        <span>State: <span class="state-tag state-${d.state}">${d.state}</span></span>
-        <span>Channel: <b class="text-white">${d.chid > 0 ? d.chid : "N/A"}</b></span>
-        <span>Conn: <b class="text-white">${d.coid > 0 ? d.coid : "N/A"}</b></span>
-      `;
+    $('btn-poll-slower')?.addEventListener('click', () => adjustPollInterval(500));
+    $('btn-poll-faster')?.addEventListener('click', () => adjustPollInterval(-500));
+    $('btn-poll-refresh')?.addEventListener('click', () => {
+        fetchTelemetry();
+        runDetective(true);
     });
-  }
 
-  // Update Cytoscape Graph with Telemetry
-  function updateGraph(threads, deadlockAnalysis) {
-    if (!cy) return;
+    $('btn-start-qemu')?.addEventListener('click', handleStartQemu);
+    $('btn-start-qemu-overlay')?.addEventListener('click', handleStartQemu);
 
-    const deadlockedNodes = new Set(deadlockAnalysis ? deadlockAnalysis.affected_threads : []);
-    const elements = [];
-    const nodeIds = new Set();
+    $('btn-trigger-deadlock')?.addEventListener('click', () => triggerDemo('deadlock'));
+    $('btn-trigger-healthy')?.addEventListener('click', () => triggerDemo('healthy'));
+    $('btn-trigger-crash')?.addEventListener('click', () => triggerDemo('crash'));
+    $('btn-trigger-benchmark')?.addEventListener('click', triggerBenchmark);
+    $('btn-bench-inline')?.addEventListener('click', triggerBenchmark);
 
-    threads.forEach(t => {
-      const id = `${t.pid}:${t.tid}`;
-      nodeIds.add(id);
-      const isDl = deadlockedNodes.has(id) || t.is_deadlocked;
+    $('btn-run-detective')?.addEventListener('click', () => runDetective(true));
+    $('btn-ai-autofix')?.addEventListener('click', triggerAiAutofix);
+    $('btn-ai-autofix-inline')?.addEventListener('click', triggerAiAutofix);
 
-      elements.push({
-        group: "nodes",
-        data: {
-          id: id,
-          pid: t.pid,
-          tid: t.tid,
-          proc_name: t.name || "proc",
-          label: `${t.name || "proc"}\n[${t.state}]`,
-          state: t.state,
-          priority: t.priority,
-          chid: t.chid,
-          coid: t.coid,
-          is_deadlocked: isDl
+    $('btn-reset-layout')?.addEventListener('click', () => {
+        state.lastStructuralSig = null;
+        if (state.latestTelemetry) {
+            updateTopologyGraph(state.latestTelemetry, state.latestDetective, true);
+        } else if (state.cy) {
+            state.cy.fit(undefined, 28);
         }
-      });
     });
 
-    // Add Deadlock Edges
-    if (deadlockAnalysis && deadlockAnalysis.cycles) {
-      deadlockAnalysis.cycles.forEach((cycle, cIdx) => {
-        const nodes = cycle.cycle_nodes;
-        for (let i = 0; i < nodes.length - 1; i++) {
-          const src = nodes[i];
-          const dst = nodes[i + 1];
-          if (nodeIds.has(src) && nodeIds.has(dst)) {
-            elements.push({
-              group: "edges",
-              data: {
-                id: `dl-${cIdx}-${src}-${dst}`,
-                source: src,
-                target: dst,
-                label: "MsgSend WAIT",
-                is_deadlock_edge: true
-              }
-            });
-          }
+    $('proc-filter-input')?.addEventListener('input', (e) => {
+        state.procFilterText = (e.target.value || '').trim().toLowerCase();
+        if (state.latestTelemetry) {
+            renderProcTable(state.latestTelemetry.threads || [], Boolean(state.latestTelemetry.connected));
         }
-      });
+    });
+
+    $('btn-clear-logs')?.addEventListener('click', () => {
+        const consoleEl = $('slog2-console');
+        if (consoleEl) consoleEl.innerHTML = '<div style="color:#81a1c1;">[Terminal buffer cleared — awaiting next telemetry frame]</div>';
+        const cntEl = $('slog2-line-count');
+        if (cntEl) cntEl.textContent = '0 lines';
+    });
+
+    // MCP JSON-RPC Studio bindings
+    $('btn-reload-mcp-tools')?.addEventListener('click', loadMcpTools);
+    $('btn-invoke-mcp-tool')?.addEventListener('click', invokeSelectedMcpTool);
+    $('mcp-args-input')?.addEventListener('input', updateMcpRequestPreview);
+
+    document.querySelectorAll('.mcp-quick-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            runQuickRestProbe(btn.dataset.endpoint, btn.dataset.method || 'GET');
+        });
+    });
+}
+
+function switchZocTab(tabName) {
+    document.querySelectorAll('.zoc-tab').forEach((btn) => {
+        btn.classList.toggle('active', btn.dataset.tab === tabName);
+    });
+
+    const btopWorkspace = $('btop-workspace');
+    const mcpStudio = $('mcp-studio-view');
+    if (!btopWorkspace || !mcpStudio) return;
+
+    if (tabName === 'mcp') {
+        btopWorkspace.classList.add('hidden');
+        mcpStudio.classList.remove('hidden');
+        if (!state.mcpTools.length) loadMcpTools();
+        return;
     }
 
-    // Connect standard IPC endpoints
-    threads.forEach(t => {
-      if (t.coid > 0 && (t.state === "SEND" || t.state === "REPLY")) {
-        const src = `${t.pid}:${t.tid}`;
-        const targetServer = threads.find(s => s.chid === t.coid && s.state === "RECEIVE");
-        if (targetServer) {
-          const dst = `${targetServer.pid}:${targetServer.tid}`;
-          const edgeId = `ipc-${src}-${dst}`;
-          if (!elements.find(e => e.data && e.data.id === edgeId)) {
-            elements.push({
-              group: "edges",
-              data: {
-                id: edgeId,
-                source: src,
-                target: dst,
-                label: `coid ${t.coid}`,
-                is_deadlock_edge: false
-              }
-            });
-          }
+    mcpStudio.classList.add('hidden');
+    btopWorkspace.classList.remove('hidden');
+    btopWorkspace.classList.toggle('mode-btop', tabName === 'btop');
+    btopWorkspace.classList.toggle('mode-topology', tabName === 'topology');
+
+    requestAnimationFrame(() => {
+        if (state.cy) {
+            state.cy.resize();
+            state.cy.fit(undefined, 28);
         }
-      }
     });
+}
 
-    cy.json({ elements: elements });
-    cy.layout({
-      name: "cose",
-      animate: false,
-      padding: 30,
-      nodeRepulsion: 450000,
-      idealEdgeLength: 80
-    }).run();
-  }
-
-  // Update UI Panels with Telemetry
-  function handleTelemetry(data) {
-    if (!data) return;
-
-    // === OFFLINE STATE (Strict Zero Simulation) ===
-    if (data.connected === false) {
-      targetBadge.className = "px-3 py-1 rounded-full text-xs font-semibold bg-rose-950 text-rose-400 border border-rose-800 flex items-center gap-2";
-      targetBadge.innerHTML = `<span class="w-2 h-2 rounded-full bg-rose-500 animate-ping"></span><span>Target: OFFLINE</span>`;
-
-      connectionBadge.className = "px-3 py-1 rounded-full text-xs font-medium bg-slate-800 text-slate-400 border border-slate-700 flex items-center gap-2";
-      connectionText.textContent = "QEMU SSH: Disconnected";
-
-      deadlockBadge.className = "px-3 py-1 rounded-full text-xs font-medium bg-slate-800 text-slate-500 border border-slate-700 flex items-center gap-2";
-      deadlockDot.className = "w-2 h-2 rounded-full bg-slate-500";
-      deadlockText.textContent = "IPC: Offline";
-
-      metricOs.textContent = "OFFLINE (Start QNX 8.0 VM)";
-      metricUptime.textContent = "Target VM stopped";
-      metricThreads.textContent = "0";
-      metricProcs.textContent = "0";
-      cntRun.textContent = "0";
-      cntRcv.textContent = "0";
-      cntSnd.textContent = "0";
-      cntRpl.textContent = "0";
-
-      deadlockPanel.className = "bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col";
-      deadlockPanelTag.className = "text-[10px] px-2 py-0.5 rounded font-mono bg-slate-800 text-slate-400";
-      deadlockPanelTag.textContent = "STATUS: OFFLINE";
-      deadlockPanelIcon.textContent = "⚡";
-      deadlockDetails.innerHTML = `<p class="text-slate-400">Waiting for QNX 8.0 QEMU VM to boot...</p>`;
-      aiBox.classList.add("hidden");
-
-      if (cyOfflineOverlay) cyOfflineOverlay.classList.remove("hidden");
-      if (cy) cy.elements().remove();
-
-      inspectTitle.textContent = "Target Offline";
-      inspectDetails.innerHTML = `<span>PID: -</span><span>TID: -</span><span>State: -</span><span>Channel: -</span><span>Conn: -</span>`;
-
-      if (btnStartQemu && !isBooting) {
-        btnStartQemu.disabled = false;
-        btnStartQemu.className = "px-3.5 py-1.5 rounded-full text-xs font-bold bg-cyan-600 hover:bg-cyan-500 text-white transition flex items-center gap-1.5 shadow-md shadow-cyan-950";
-        if (btnStartQemuIcon) btnStartQemuIcon.textContent = "🚀";
-        if (btnStartQemuText) btnStartQemuText.textContent = "Start QNX 8.0 QEMU VM";
-      }
-
-      const slogText = data.slog2_tail || "[OFFLINE] Waiting for QNX 8.0 VM...";
-      if (slogText !== lastLogs) {
-        lastLogs = slogText;
-        slogConsole.innerHTML = `<div class="terminal-line warn">${slogText}</div>`;
-      }
-      return;
+function adjustPollInterval(deltaMs) {
+    state.pollIntervalMs = Math.max(500, Math.min(10000, state.pollIntervalMs + deltaMs));
+    const label = $('poll-interval-label');
+    if (label) {
+        label.textContent = `${(state.pollIntervalMs / 1000).toFixed(1)}s`;
     }
+    restartPollTimer();
+}
 
-    // === LIVE TARGET CONNECTED ===
-    if (cyOfflineOverlay) cyOfflineOverlay.classList.add("hidden");
+function restartPollTimer() {
+    if (state.pollTimer) clearInterval(state.pollTimer);
+    state.pollTimer = setInterval(fetchTelemetry, state.pollIntervalMs);
+}
 
-    if (btnStartQemu && !isBooting) {
-      btnStartQemu.disabled = true;
-      btnStartQemu.className = "px-3.5 py-1.5 rounded-full text-xs font-medium bg-slate-800 text-emerald-400 border border-emerald-800/50 flex items-center gap-1.5 cursor-default";
-      if (btnStartQemuIcon) btnStartQemuIcon.textContent = "🟢";
-      if (btnStartQemuText) btnStartQemuText.textContent = "QNX VM Running";
-    }
-
-    // 1. System Info
-    if (data.system) {
-      metricOs.textContent = `${data.system.os || "QNX 8.0"} (${data.system.architecture || "x86_64"})`;
-      metricUptime.textContent = `Uptime: ${data.system.uptime_sec || 0}s | Host: ${data.system.hostname || "qnx"}`;
-      metricThreads.textContent = data.system.num_threads || (data.threads ? data.threads.length : 0);
-      metricProcs.textContent = data.system.num_processes || 0;
-
-      targetBadge.className = "px-3 py-1 rounded-full text-xs font-medium bg-emerald-950 text-emerald-300 border border-emerald-800 flex items-center gap-2";
-      targetBadge.innerHTML = `
-        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-        <span>Target: ${data.system.os || "QNX Neutrino 8.0"}</span>
-      `;
-
-      connectionBadge.className = "px-3 py-1 rounded-full text-xs font-medium bg-emerald-950 text-emerald-400 border border-emerald-800 flex items-center gap-2";
-      connectionText.textContent = "QEMU SSH: Active (127.0.0.1:2222)";
-    }
-
-    // 2. Thread State Counts
-    const threads = data.threads || [];
-    let r = 0, rcv = 0, snd = 0, rpl = 0;
-    threads.forEach(t => {
-      const s = (t.state || "").toUpperCase();
-      if (s === "RUNNING" || s === "READY") r++;
-      else if (s === "RECEIVE") rcv++;
-      else if (s === "SEND") snd++;
-      else if (s === "REPLY") rpl++;
-    });
-    cntRun.textContent = r;
-    cntRcv.textContent = rcv;
-    cntSnd.textContent = snd;
-    cntRpl.textContent = rpl;
-
-    // 3. Deadlock Detective Analysis
-    const da = data.deadlock_analysis || {};
-    if (da.deadlock_detected) {
-      deadlockBadge.className = "px-3 py-1 rounded-full text-xs font-bold bg-rose-950 text-rose-400 border border-rose-800 flex items-center gap-2 pulse-red";
-      deadlockDot.className = "w-2 h-2 rounded-full bg-rose-400";
-      deadlockText.textContent = `DEADLOCK (${da.cycle_count} cycles)`;
-
-      deadlockPanel.className = "bg-slate-900 border border-rose-800 rounded-xl p-4 flex flex-col shadow-lg shadow-rose-950/40";
-      deadlockPanelTag.className = "text-[10px] px-2 py-0.5 rounded font-mono bg-rose-950 text-rose-400 border border-rose-800";
-      deadlockPanelTag.textContent = "CRITICAL DEADLOCK";
-      deadlockPanelIcon.textContent = "🚨";
-
-      let cyclesHtml = "";
-      da.cycles.forEach(c => {
-        cyclesHtml += `
-          <div class="p-2.5 rounded bg-rose-950/40 border border-rose-900/60 font-mono text-[11px]">
-            <div class="text-rose-300 font-bold mb-1">Wait Cycle: ${c.cycle_path}</div>
-            <div class="text-slate-400">${c.description}</div>
-          </div>
-        `;
-      });
-      deadlockDetails.innerHTML = cyclesHtml;
-
-      if (da.remediation_advice) {
-        aiBox.classList.remove("hidden");
-        aiText.textContent = da.remediation_advice;
-      }
-    } else {
-      deadlockBadge.className = "px-3 py-1 rounded-full text-xs font-bold bg-slate-800 text-slate-400 border border-slate-700 flex items-center gap-2";
-      deadlockDot.className = "w-2 h-2 rounded-full bg-emerald-400";
-      deadlockText.textContent = "IPC: Nominal";
-
-      deadlockPanel.className = "bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col";
-      deadlockPanelTag.className = "text-[10px] px-2 py-0.5 rounded font-mono bg-slate-800 text-slate-400";
-      deadlockPanelTag.textContent = "STATUS: CLEAN";
-      deadlockPanelIcon.textContent = "🛡";
-
-      deadlockDetails.innerHTML = `<p class="text-slate-400">${da.summary || "No circular waits detected in the QNX message-passing pipeline."}</p>`;
-      aiBox.classList.add("hidden");
-    }
-
-    // 4. Update Slog2 Console
-    const slogText = data.slog2_tail || "";
-    if (slogText && slogText !== lastLogs) {
-      lastLogs = slogText;
-      const lines = slogText.split("\n");
-      slogConsole.innerHTML = "";
-      lines.slice(-50).forEach(l => {
-        const trimmed = l.trim();
-        if (!trimmed) return;
-        const div = document.createElement("div");
-        div.className = "terminal-line";
-        if (trimmed.includes("CRIT") || trimmed.includes("DEADLOCK")) div.classList.add("crit");
-        else if (trimmed.includes("ERROR") || trimmed.includes("FAIL")) div.classList.add("error");
-        else if (trimmed.includes("WARN")) div.classList.add("warn");
-        else div.classList.add("info");
-        div.textContent = trimmed;
-        slogConsole.appendChild(div);
-      });
-      slogConsole.scrollTop = slogConsole.scrollHeight;
-    }
-
-    // 5. Update Cytoscape Graph
-    updateGraph(threads, da);
-  }
-
-  // WebSocket Connection Setup
-  function connectWebSocket() {
-    const wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${wsProto}//${window.location.host}/ws/telemetry`;
-
+/* ============================================================================
+ * WebSocket & Telemetry Polling
+ * ========================================================================= */
+function connectWebSocket() {
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const url = `${proto}//${window.location.host}/ws/telemetry`;
     try {
-      ws = new WebSocket(wsUrl);
-
-      ws.onopen = () => {
-        connectionBadge.className = "px-3 py-1 rounded-full text-xs font-medium bg-emerald-950 text-emerald-400 border border-emerald-800 flex items-center gap-2";
-        connectionText.textContent = "Telemetry: Live (WS)";
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          if (msg.type === "telemetry_update") {
-            handleTelemetry(msg.payload);
-          }
-        } catch (e) {
-          console.error("Error parsing WS telemetry:", e);
-        }
-      };
-
-      ws.onclose = () => {
-        connectionBadge.className = "px-3 py-1 rounded-full text-xs font-medium bg-amber-950 text-amber-400 border border-amber-800 flex items-center gap-2";
-        connectionText.textContent = "Polling (REST Fallback)";
-        setTimeout(connectWebSocket, 4000);
-      };
-
-      ws.onerror = () => {
-        ws.close();
-      };
-    } catch (e) {
-      console.warn("WebSocket unavailable, falling back to REST poll.");
+        const ws = new WebSocket(url);
+        state.ws = ws;
+        ws.onmessage = (evt) => {
+            try {
+                const msg = JSON.parse(evt.data);
+                if (msg && msg.type === 'telemetry_update' && msg.payload) {
+                    applyTelemetry(msg.payload);
+                }
+            } catch (_) {
+                // Ignore malformed ws packet
+            }
+        };
+        ws.onclose = () => {
+            state.ws = null;
+            setTimeout(connectWebSocket, 3000);
+        };
+        ws.onerror = () => {
+            try { ws.close(); } catch (_) {}
+        };
+    } catch (_) {
+        // Fallback polling continues seamlessly
     }
-  }
+}
 
-  // Fallback REST Polling
-  async function pollTelemetry() {
+async function fetchTelemetry() {
     try {
-      const res = await fetch(`${API_BASE}/api/telemetry`);
-      if (res.ok) {
-        const data = await res.json();
-        handleTelemetry(data);
-      }
-    } catch (e) {
-      console.warn("REST poll failed:", e);
+        const resp = await fetch('/api/telemetry');
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        applyTelemetry(data);
+    } catch (err) {
+        applyTelemetry({
+            connected: false,
+            simulated: false,
+            error: `Backend API unreachable: ${err.message}`,
+            system: {
+                os: 'API DISCONNECTED',
+                architecture: 'x86_64',
+                hostname: 'disconnected',
+                uptime_sec: 0,
+                num_processes: 0,
+                num_threads: 0,
+                deadlocks_detected: 0,
+            },
+            threads: [],
+            slog2_tail: `[OFFLINE] FastAPI bridge unreachable (${err.message}).`,
+        });
     }
-  }
+}
 
-  // Start QEMU VM Action
-  async function startQemuVm() {
-    if (isBooting) return;
-    isBooting = true;
+function applyTelemetry(data) {
+    state.latestTelemetry = data;
+    const connected = Boolean(data && data.connected);
+    const sys = data.system || {};
+    const threads = Array.isArray(data.threads) ? data.threads : [];
 
-    const setStatus = (msg) => {
-      if (btnStartQemuText) btnStartQemuText.textContent = msg;
-      if (btnStartQemuIcon) btnStartQemuIcon.textContent = "⏳";
-      if (btnStartOverlay) btnStartOverlay.innerHTML = `<span>⏳ ${msg}</span>`;
-      if (btnStartQemu) btnStartQemu.disabled = true;
-      if (btnStartOverlay) btnStartOverlay.disabled = true;
+    updateConnectionChrome(connected, sys);
+    renderKernelCpuPanel(connected, sys, threads);
+    renderProcTable(threads, connected);
+    renderSlog2Console(data.slog2_tail, connected);
+    updateTopologyGraph(data, state.latestDetective, false);
+
+    if (!connected) {
+        state.latestDetective = null;
+        state.lastDetectiveSig = null;
+        renderDetectiveOffline();
+        return;
+    }
+
+    // Trigger background Detective audit when thread blocking pattern changes or initial connect
+    const sig = threads
+        .filter((t) => t.target_pid || t.is_deadlocked)
+        .map((t) => `${t.pid}:${t.tid}->${t.target_pid || 0}:${t.state}:${t.priority}:${t.is_deadlocked ? 1 : 0}`)
+        .sort()
+        .join('|');
+
+    if (sig !== state.lastDetectiveSig && !state.detectiveInFlight) {
+        state.lastDetectiveSig = sig;
+        runDetective(false);
+    }
+}
+
+function updateConnectionChrome(connected, sys) {
+    const connBadge = $('connection-badge');
+    const connText = $('connection-status-text');
+    const targetBadge = $('target-badge');
+    const overlay = $('cy-offline-overlay');
+
+    if (connBadge) {
+        connBadge.style.borderColor = connected ? '#a3be8c' : '#bf616a';
+        connBadge.style.color = connected ? '#a3be8c' : '#bf616a';
+    }
+    if (connText) {
+        connText.textContent = connected ? 'ONLINE (QNX 8.0)' : 'OFFLINE';
+    }
+    if (targetBadge) {
+        const arch = sys.architecture || 'x86_64';
+        const host = sys.hostname || 'disconnected';
+        targetBadge.textContent = connected ? `QNX 8.0 ${arch} :: ${host}` : `QNX 8.0 ${arch} :: OFFLINE`;
+    }
+    if (overlay) {
+        overlay.classList.toggle('hidden', connected);
+    }
+
+    const qemuBtn = $('btn-start-qemu');
+    const qemuIcon = $('btn-start-qemu-icon');
+    const qemuText = $('btn-start-qemu-text');
+    if (qemuBtn && !state.isBootingQemu) {
+        qemuBtn.disabled = connected;
+        if (qemuIcon) qemuIcon.textContent = connected ? '●' : '▶';
+        if (qemuText) qemuText.textContent = connected ? 'VM ONLINE' : 'START QEMU';
+    }
+
+    // Bottom ZOC session footer
+    const sshEl = $('zoc-status-ssh');
+    const devEl = $('zoc-status-dev');
+    const upEl = $('zoc-status-uptime');
+    if (sshEl) {
+        sshEl.textContent = connected ? 'SSH: 127.0.0.1:2222 [UP]' : 'SSH: 127.0.0.1:2222 [OFFLINE]';
+        sshEl.style.color = connected ? '#a3be8c' : '#bf616a';
+    }
+    if (devEl) {
+        devEl.textContent = connected ? '/dev/qnx_inspector: MOUNTED' : '/dev/qnx_inspector: CLOSED';
+        devEl.style.color = connected ? '#88c0d0' : '#81a1c1';
+    }
+    if (upEl) {
+        upEl.textContent = connected ? `UP: ${formatUptime(sys.uptime_sec)}` : 'UP: --:--:--';
+    }
+}
+
+/* ============================================================================
+ * Panel 1: btop Kernel & Braille Sparklines
+ * ========================================================================= */
+function renderKernelCpuPanel(connected, sys, threads) {
+    const metaEl = $('cpu-header-meta');
+    const osEl = $('metric-os');
+    const upEl = $('metric-uptime');
+
+    if (metaEl) metaEl.textContent = `${sys.architecture || 'x86_64'} · ${sys.hostname || 'offline'}`;
+    if (osEl) osEl.textContent = sys.os || (connected ? 'QNX Neutrino 8.0' : 'OFFLINE');
+    if (upEl) upEl.textContent = connected ? formatUptime(sys.uptime_sec) : '--:--:--';
+
+    let runCnt = 0;
+    let rcvCnt = 0;
+    let sndCnt = 0;
+    let rplCnt = 0;
+
+    for (const t of threads) {
+        const g = classifyStateGroup(t.state);
+        if (g === 'RUN') runCnt += 1;
+        else if (g === 'RCV') rcvCnt += 1;
+        else if (g === 'SND') sndCnt += 1;
+        else if (g === 'RPL') rplCnt += 1;
+    }
+
+    const totalThreads = threads.length || (Number(sys.num_threads) || 0);
+    const totalProcs = Number(sys.num_processes) || 0;
+    const denom = Math.max(1, totalThreads);
+
+    const activeRatio = connected ? Math.min(1, (runCnt + sndCnt + rplCnt) / Math.max(4, denom * 0.4)) : 0;
+    const ipcRatio = connected ? Math.min(1, (rcvCnt + sndCnt + rplCnt) / Math.max(4, denom)) : 0;
+
+    state.activeHistory.shift();
+    state.activeHistory.push(activeRatio);
+    state.ipcHistory.shift();
+    state.ipcHistory.push(ipcRatio);
+
+    const activeSpark = $('braille-sparkline-active');
+    const ipcSpark = $('braille-sparkline-ipc');
+    const statsEl = $('braille-stats');
+    if (activeSpark) activeSpark.textContent = renderBrailleSparkline(state.activeHistory);
+    if (ipcSpark) ipcSpark.textContent = renderBrailleSparkline(state.ipcHistory);
+    if (statsEl) {
+        const actPct = Math.round(activeRatio * 100);
+        const ipcPct = Math.round(ipcRatio * 100);
+        statsEl.textContent = connected ? `ACT ${actPct}% · IPC ${ipcPct}%` : 'OFFLINE';
+    }
+
+    const setMeter = (meterId, countId, value, ratio) => {
+        const m = $(meterId);
+        const c = $(countId);
+        if (m) m.textContent = renderAsciiMeter(connected ? ratio : 0, 16);
+        if (c) c.textContent = String(value);
     };
 
-    setStatus("Booting QNX 8.0 VM (5-10s)...");
+    setMeter('meter-threads', 'metric-threads', totalThreads, Math.min(1, totalThreads / 120));
+    setMeter('meter-procs', 'metric-procs', totalProcs, Math.min(1, totalProcs / 60));
+    setMeter('meter-run', 'cnt-run', runCnt, runCnt / denom);
+    setMeter('meter-rcv', 'cnt-rcv', rcvCnt, rcvCnt / denom);
+    setMeter('meter-snd', 'cnt-snd', sndCnt, sndCnt / denom);
+    setMeter('meter-rpl', 'cnt-rpl', rplCnt, rplCnt / denom);
+}
+
+/* ============================================================================
+ * Panel 4: pidin Process & Thread Inspector Table (2-way Sync)
+ * ========================================================================= */
+function renderProcTable(threads, connected) {
+    const tbody = $('proc-table-body');
+    const cntEl = $('proc-table-count');
+    if (!tbody) return;
+
+    if (!connected) {
+        if (cntEl) cntEl.textContent = '0/0';
+        tbody.innerHTML = '<tr><td colspan="5" style="color:#bf616a;text-align:center;padding:14px;">[OFFLINE] QNX 8.0 target disconnected — zero-simulation policy active.</td></tr>';
+        return;
+    }
+
+    const filter = state.procFilterText;
+    const filtered = !filter
+        ? threads
+        : threads.filter((t) => {
+              const hay = `${t.pid}:${t.tid} ${t.name || ''} ${t.state || ''} ${t.priority ?? ''} ${t.chid || 0} ${t.target_pid || 0}`.toLowerCase();
+              return hay.includes(filter);
+          });
+
+    if (cntEl) cntEl.textContent = `${filtered.length}/${threads.length}`;
+
+    if (!filtered.length) {
+        tbody.innerHTML = '<tr><td colspan="5" style="color:#81a1c1;text-align:center;padding:14px;">No QNX threads match filter.</td></tr>';
+        return;
+    }
+
+    // Prioritize deadlocked & IPC-active threads at the top for fast visibility
+    const sorted = [...filtered].sort((a, b) => {
+        if (Boolean(a.is_deadlocked) !== Boolean(b.is_deadlocked)) return a.is_deadlocked ? -1 : 1;
+        const aTarget = Number(a.target_pid) > 0 ? 1 : 0;
+        const bTarget = Number(b.target_pid) > 0 ? 1 : 0;
+        if (aTarget !== bTarget) return bTarget - aTarget;
+        return (Number(a.pid) - Number(b.pid)) || (Number(a.tid) - Number(b.tid));
+    });
+
+    tbody.innerHTML = sorted
+        .map((t) => {
+            const key = threadKey(t);
+            const selectedClass = state.selectedNodeKey === key ? ' class="proc-selected"' : '';
+            const stateColor = stateBadgeColor(t.state, t.is_deadlocked);
+            const stateLabel = t.is_deadlocked ? `${t.state} [LOCK]` : (t.state || '--');
+            const chidCoid = `${t.chid || 0}/${t.coid || 0}` + (t.target_pid ? ` → ${t.target_pid}` : '');
+            return `<tr data-thread-key="${escapeHtml(key)}"${selectedClass}>
+                <td>${escapeHtml(key)}</td>
+                <td title="${escapeHtml(t.name)}">${escapeHtml(t.name || 'proc')}</td>
+                <td style="color:${stateColor};font-weight:600;">${escapeHtml(stateLabel)}</td>
+                <td>${escapeHtml(t.priority ?? '--')}</td>
+                <td>${escapeHtml(chidCoid)}</td>
+            </tr>`;
+        })
+        .join('');
+
+    tbody.querySelectorAll('tr[data-thread-key]').forEach((row) => {
+        row.addEventListener('click', () => {
+            selectThreadByKey(row.dataset.threadKey, true);
+        });
+    });
+}
+
+function selectThreadByKey(key, panGraph) {
+    state.selectedNodeKey = key;
+
+    // Highlight table row
+    const tbody = $('proc-table-body');
+    if (tbody) {
+        tbody.querySelectorAll('tr[data-thread-key]').forEach((tr) => {
+            const active = tr.dataset.threadKey === key;
+            tr.classList.toggle('proc-selected', active);
+            if (active && !panGraph) {
+                tr.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            }
+        });
+    }
+
+    const threads = state.latestTelemetry?.threads || [];
+    const threadObj = threads.find((t) => threadKey(t) === key);
+    updateNodeInspector(threadObj, key);
+
+    if (panGraph && state.cy && key) {
+        state.cy.$(':selected').unselect();
+        const node = state.cy.getElementById(key);
+        if (node && node.length) {
+            node.select();
+            state.cy.animate({ center: { eles: node }, duration: 250 });
+        }
+    }
+}
+
+function updateNodeInspector(t, fallbackKey) {
+    const titleEl = $('inspect-title');
+    const detailsEl = $('inspect-details');
+    if (!titleEl || !detailsEl) return;
+
+    if (!t) {
+        titleEl.textContent = fallbackKey ? `Selected: ${fallbackKey}` : 'Click a node or thread row to inspect';
+        detailsEl.textContent = '';
+        return;
+    }
+
+    titleEl.textContent = `${t.name || 'thread'} (${t.pid}:${t.tid})`;
+    const targetInfo = t.target_pid ? `Blocked on PID ${t.target_pid}:${t.target_tid || 1}` : 'No active IPC block target';
+    detailsEl.textContent = `State: ${t.state} | Prio: ${t.priority} | ChID/Coid: ${t.chid || 0}/${t.coid || 0} | ${targetInfo}`;
+}
+
+/* ============================================================================
+ * Panel 2: Cytoscape IPC Topology Engine
+ * ========================================================================= */
+function initCytoscape() {
+    const container = $('cy-container');
+    if (!container || typeof cytoscape === 'undefined') return;
+
+    state.cy = cytoscape({
+        container,
+        elements: [],
+        wheelSensitivity: 0.2,
+        style: [
+            {
+                selector: 'node',
+                style: {
+                    label: 'data(label)',
+                    'background-color': '#181e28',
+                    'border-color': '#88c0d0',
+                    'border-width': 2,
+                    color: '#e5e9f0',
+                    'font-family': 'JetBrains Mono, Consolas, monospace',
+                    'font-size': 10,
+                    'text-valign': 'bottom',
+                    'text-margin-y': 5,
+                    width: 26,
+                    height: 26,
+                },
+            },
+            {
+                selector: 'node[group="SND"]',
+                style: { 'border-color': '#ebcb8b' },
+            },
+            {
+                selector: 'node[group="RUN"]',
+                style: { 'border-color': '#a3be8c' },
+            },
+            {
+                selector: 'node[group="RPL"]',
+                style: { 'border-color': '#b48ead' },
+            },
+            {
+                selector: 'node[?deadlocked]',
+                style: {
+                    'background-color': '#3b151a',
+                    'border-color': '#bf616a',
+                    'border-width': 3,
+                    width: 32,
+                    height: 32,
+                },
+            },
+            {
+                selector: 'node[?priorityInverted]',
+                style: {
+                    'border-color': '#d08770',
+                    'border-style': 'dashed',
+                    'border-width': 3,
+                },
+            },
+            {
+                selector: 'node:selected',
+                style: {
+                    'border-color': '#eceff4',
+                    'border-width': 3,
+                    'background-color': '#2e3440',
+                },
+            },
+            {
+                selector: 'edge',
+                style: {
+                    width: 1.8,
+                    'line-color': '#5e81ac',
+                    'target-arrow-color': '#5e81ac',
+                    'target-arrow-shape': 'triangle',
+                    'curve-style': 'bezier',
+                    label: 'data(label)',
+                    'font-family': 'JetBrains Mono, Consolas, monospace',
+                    'font-size': 8,
+                    color: '#81a1c1',
+                    'text-rotation': 'autorotate',
+                },
+            },
+            {
+                selector: 'edge[?deadlocked]',
+                style: {
+                    width: 3,
+                    'line-color': '#bf616a',
+                    'target-arrow-color': '#bf616a',
+                },
+            },
+            {
+                selector: 'edge[?priorityInverted]',
+                style: {
+                    width: 2.4,
+                    'line-color': '#d08770',
+                    'target-arrow-color': '#d08770',
+                    'line-style': 'dashed',
+                },
+            },
+        ],
+    });
+
+    state.cy.on('tap', 'node', (evt) => {
+        const id = evt.target.id();
+        selectThreadByKey(id, false);
+    });
+}
+
+function updateTopologyGraph(data, detectiveRes, forceLayout) {
+    const cy = state.cy;
+    if (!cy) return;
+
+    if (!data || !data.connected) {
+        if (cy.elements().length) cy.elements().remove();
+        state.lastStructuralSig = null;
+        return;
+    }
+
+    const threads = Array.isArray(data.threads) ? data.threads : [];
+    const deadlockedSet = new Set(
+        Array.isArray(detectiveRes?.affected_threads) ? detectiveRes.affected_threads.map(String) : []
+    );
+    const piSet = new Set();
+    const inversions = detectiveRes?.priority_inversions || [];
+    for (const pi of inversions) {
+        if (pi && typeof pi === 'object') {
+            if (pi.client) piSet.add(String(pi.client));
+            if (pi.server) piSet.add(String(pi.server));
+            if (pi.blocked_thread) piSet.add(String(pi.blocked_thread));
+            if (pi.blocker_thread) piSet.add(String(pi.blocker_thread));
+        }
+    }
+
+    // Build focused IPC graph: include threads with active IPC targets, deadlocks, priority inversions, or unique named servers
+    const threadByKey = new Map();
+    const threadsByPid = new Map();
+    for (const t of threads) {
+        const k = threadKey(t);
+        threadByKey.set(k, t);
+        if (!threadsByPid.has(t.pid)) threadsByPid.set(t.pid, []);
+        threadsByPid.get(t.pid).push(t);
+    }
+
+    const includedKeys = new Set();
+    const edges = [];
+
+    for (const t of threads) {
+        const srcKey = threadKey(t);
+        const srcLocked = Boolean(t.is_deadlocked || deadlockedSet.has(srcKey));
+        if (srcLocked || piSet.has(srcKey)) includedKeys.add(srcKey);
+        if (Number(t.target_pid) > 0) {
+            includedKeys.add(srcKey);
+            let dstKey = `${t.target_pid}:${t.target_tid || 1}`;
+            if (!threadByKey.has(dstKey)) {
+                const candidates = threadsByPid.get(Number(t.target_pid)) || [];
+                if (candidates.length) dstKey = threadKey(candidates[0]);
+            }
+            if (threadByKey.has(dstKey)) {
+                includedKeys.add(dstKey);
+                const dstThread = threadByKey.get(dstKey);
+                const dstLocked = Boolean(dstThread?.is_deadlocked || deadlockedSet.has(dstKey));
+                const edgeDeadlocked = srcLocked && dstLocked;
+                const edgePi = piSet.has(srcKey) && piSet.has(dstKey);
+                edges.push({
+                    id: `e:${srcKey}->${dstKey}`,
+                    source: srcKey,
+                    target: dstKey,
+                    label: edgeDeadlocked ? 'DEADLOCK' : 'MsgSend',
+                    deadlocked: edgeDeadlocked,
+                    priorityInverted: edgePi,
+                });
+            }
+        }
+    }
+
+    // Also include up to 12 representative active kernel/system processes so live VM always shows rich nodes even when healthy
+    if (includedKeys.size < 12) {
+        for (const t of threads) {
+            if (includedKeys.size >= 16) break;
+            if (t.tid === 1 || Number(t.chid) > 0) {
+                includedKeys.add(threadKey(t));
+            }
+        }
+    }
+
+    const nodeList = Array.from(includedKeys)
+        .map((k) => threadByKey.get(k))
+        .filter(Boolean)
+        .map((t) => {
+            const k = threadKey(t);
+            const shortName = (t.name || 'proc').split('/').pop();
+            return {
+                id: k,
+                label: `${shortName} (${k})`,
+                group: classifyStateGroup(t.state),
+                deadlocked: Boolean(t.is_deadlocked || deadlockedSet.has(k)),
+                priorityInverted: piSet.has(k),
+            };
+        });
+
+    const structuralSig = [
+        nodeList.map((n) => n.id).sort().join(','),
+        edges.map((e) => e.id).sort().join(','),
+    ].join('||');
+
+    if (!forceLayout && structuralSig === state.lastStructuralSig) {
+        // Update attributes cleanly in-place without disturbing layout or pan/zoom
+        cy.batch(() => {
+            for (const n of nodeList) {
+                const ele = cy.getElementById(n.id);
+                if (ele.length) ele.data(n);
+            }
+            for (const e of edges) {
+                const ele = cy.getElementById(e.id);
+                if (ele.length) ele.data(e);
+            }
+        });
+        return;
+    }
+
+    state.lastStructuralSig = structuralSig;
+    const elements = [
+        ...nodeList.map((d) => ({ data: d })),
+        ...edges.map((d) => ({ data: d })),
+    ];
+
+    cy.batch(() => {
+        cy.elements().remove();
+        cy.add(elements);
+    });
+
+    if (elements.length > 0) {
+        cy.layout({
+            name: 'cose',
+            animate: false,
+            nodeRepulsion: 6000,
+            idealEdgeLength: 90,
+            padding: 28,
+        }).run();
+    }
+
+    if (state.selectedNodeKey) {
+        const selected = cy.getElementById(state.selectedNodeKey);
+        if (selected && selected.length) selected.select();
+    }
+}
+
+/* ============================================================================
+ * Panel 3: Deadlock Detective, Priority Inversion Auditor, AI Hot-Patch & Benchmark
+ * ========================================================================= */
+function renderDetectiveOffline() {
+    const badge = $('deadlock-badge');
+    const dot = $('deadlock-dot');
+    const txt = $('deadlock-status-text');
+    const panel = $('deadlock-panel');
+    const icon = $('deadlock-panel-icon');
+    const tag = $('deadlock-panel-tag');
+    const details = $('deadlock-details');
+    const piBadge = $('pi-count-badge');
+    const piList = $('pi-auditor-list');
+    const aiBox = $('ai-remediation-box');
+
+    if (badge) {
+        badge.style.borderColor = '#4c566a';
+        badge.style.color = '#81a1c1';
+    }
+    if (dot) dot.style.backgroundColor = '#81a1c1';
+    if (txt) txt.textContent = 'DETECTION: OFFLINE';
+    if (panel) panel.classList.remove('panel-alert');
+    if (icon) icon.textContent = '🛡';
+    if (tag) tag.textContent = '[STANDBY]';
+    if (details) details.textContent = 'Connect QNX 8.0 target to audit MsgSend cycles & priority inversions.';
+    if (piBadge) {
+        piBadge.className = 'pi-clean';
+        piBadge.textContent = 'PI: 0';
+    }
+    if (piList) piList.innerHTML = '';
+    if (aiBox) aiBox.classList.add('hidden');
+}
+
+async function runDetective(manual = false) {
+    if (state.detectiveInFlight) return;
+    if (!state.latestTelemetry || !state.latestTelemetry.connected) {
+        if (manual) renderDetectiveOffline();
+        return;
+    }
+
+    state.detectiveInFlight = true;
+    const tag = $('deadlock-panel-tag');
+    if (manual && tag) tag.textContent = '[SCANNING]';
 
     try {
-      const res = await fetch(`${API_BASE}/api/qemu/start`, { method: "POST" });
-      const data = await res.json();
-      if (data.success) {
-        setStatus("Target Connected & Provisioned!");
-        setTimeout(() => {
-          isBooting = false;
-          pollTelemetry();
-        }, 1200);
-      } else {
-        alert("Failed to start QEMU VM: " + (data.error || "Unknown error"));
-        isBooting = false;
-        pollTelemetry();
-      }
+        const resp = await fetch('/api/detective', { method: 'POST' });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const res = await resp.json();
+        state.latestDetective = res;
+        renderDetectiveResult(res);
+        updateTopologyGraph(state.latestTelemetry, res, false);
     } catch (err) {
-      alert("Error triggering QEMU launch: " + err);
-      isBooting = false;
-      pollTelemetry();
+        if (tag) tag.textContent = '[ERR]';
+        const details = $('deadlock-details');
+        if (details) details.textContent = `Detective audit error: ${err.message}`;
+    } finally {
+        state.detectiveInFlight = false;
     }
-  }
+}
 
-  // Action Button Listeners
-  if (btnStartQemu) btnStartQemu.addEventListener("click", startQemuVm);
-  if (btnStartOverlay) btnStartOverlay.addEventListener("click", startQemuVm);
+function renderDetectiveResult(res) {
+    if (!res) return;
+    const badge = $('deadlock-badge');
+    const dot = $('deadlock-dot');
+    const txt = $('deadlock-status-text');
+    const panel = $('deadlock-panel');
+    const icon = $('deadlock-panel-icon');
+    const tag = $('deadlock-panel-tag');
+    const details = $('deadlock-details');
+    const aiBox = $('ai-remediation-box');
+    const aiText = $('ai-remediation-text');
+    const piBadge = $('pi-count-badge');
+    const piList = $('pi-auditor-list');
 
-  document.getElementById("btn-trigger-deadlock").addEventListener("click", async () => {
+    const hasDeadlock = Boolean(res.deadlock_detected || (Array.isArray(res.cycles) && res.cycles.length > 0));
+    const inversions = Array.isArray(res.priority_inversions) ? res.priority_inversions : [];
+    const piCount = Number(res.priority_inversion_count ?? inversions.length) || 0;
+
+    if (badge) {
+        badge.style.borderColor = hasDeadlock ? '#bf616a' : (piCount > 0 ? '#ebcb8b' : '#a3be8c');
+        badge.style.color = hasDeadlock ? '#bf616a' : (piCount > 0 ? '#ebcb8b' : '#a3be8c');
+    }
+    if (dot) {
+        dot.style.backgroundColor = hasDeadlock ? '#bf616a' : (piCount > 0 ? '#ebcb8b' : '#a3be8c');
+    }
+    if (txt) {
+        txt.textContent = hasDeadlock
+            ? `DEADLOCK (${(res.cycles || []).length} CYCLE)`
+            : piCount > 0
+            ? `PRIO INVERSION (${piCount})`
+            : 'IPC GRAPH HEALTHY';
+    }
+
+    if (panel) panel.classList.toggle('panel-alert', hasDeadlock);
+    if (icon) icon.textContent = hasDeadlock ? '🚨' : (piCount > 0 ? '⚠' : '🛡');
+    if (tag) tag.textContent = hasDeadlock ? '[CRITICAL]' : (piCount > 0 ? '[WARN]' : '[OK]');
+
+    if (details) {
+        const msg = res.diagnosis || res.summary || (hasDeadlock ? 'Circular MsgSend Wait-For Cycle Detected!' : 'No circular MsgSend wait-for cycles detected.');
+        details.textContent = msg;
+    }
+
+    if (piBadge) {
+        piBadge.className = piCount > 0 ? 'pi-warn' : 'pi-clean';
+        piBadge.textContent = `PI: ${piCount}`;
+    }
+
+    if (piList) {
+        if (!inversions.length) {
+            piList.innerHTML = '';
+        } else {
+            piList.innerHTML = inversions
+                .map((pi) => {
+                    if (typeof pi === 'string') {
+                        return `<div style="color:#ebcb8b;font-size:11px;margin-top:4px;">▸ ${escapeHtml(pi)}</div>`;
+                    }
+                    const highName = pi.client_name || pi.blocked_name || pi.client || 'client';
+                    const lowName = pi.server_name || pi.blocker_name || pi.server || 'server';
+                    const highPrio = pi.client_priority ?? pi.blocked_priority ?? '?';
+                    const lowPrio = pi.server_priority ?? pi.blocker_priority ?? '?';
+                    const reason = pi.description || `${highName} (prio ${highPrio}) blocked on ${lowName} (prio ${lowPrio})`;
+                    return `<div style="color:#ebcb8b;font-size:11px;margin-top:4px;">▸ [PRIO INV] ${escapeHtml(reason)}</div>`;
+                })
+                .join('');
+        }
+    }
+
+    if (aiBox && aiText) {
+        const advice = res.remediation_advice || res.remediation;
+        if (hasDeadlock || piCount > 0 || advice) {
+            aiBox.classList.remove('hidden');
+            aiText.textContent =
+                advice ||
+                'Circular blocking detected between synchronous MsgSend() threads. Click [AI HOT-PATCH] to slay deadlocked binary, compile asymmetric non-blocking ipc_healthy_demo via QCC, and deploy to target.';
+        } else {
+            aiBox.classList.add('hidden');
+        }
+    }
+}
+
+async function triggerAiAutofix() {
+    const btnBar = $('btn-ai-autofix');
+    const btnInline = $('btn-ai-autofix-inline');
+    const outEl = $('hotpatch-output');
+    const aiBox = $('ai-remediation-box');
+
+    if (aiBox) aiBox.classList.remove('hidden');
+    if (btnBar) btnBar.disabled = true;
+    if (btnInline) btnInline.disabled = true;
+    if (outEl) {
+        outEl.classList.remove('hidden');
+        outEl.textContent = '[QCC HOT-PATCH] Terminating deadlock -> qcc -Vgcc_ntox86_64 compile -> SCP deploy -> executing ipc_healthy_demo...';
+    }
+
     try {
-      const res = await fetch(`${API_BASE}/api/trigger/deadlock`, { method: "POST" });
-      const data = await res.json();
-      if (!data.success && data.error) {
-        alert(data.error);
-      }
-      setTimeout(pollTelemetry, 600);
-    } catch (e) {
-      alert("Failed to dispatch deadlock demo: " + e);
-    }
-  });
+        const resp = await fetch('/api/remediate/deadlock', { method: 'POST' });
+        const data = await resp.json();
+        if (!resp.ok) {
+            throw new Error(data.detail || `HTTP ${resp.status}`);
+        }
+        const summary = [
+            `[QCC] ${data.qcc_command || 'qcc -Vgcc_ntox86_64'} -> exit ${data.qcc_exit_code}`,
+            `[SLAY] ${data.slayed ? 'ipc_deadlock_demo terminated' : 'no active deadlock binary slain'}`,
+            `[SCP] ${data.upload_message || data.target_deployed || 'deployed'}`,
+            data.execution_stdout ? `[EXEC]\n${data.execution_stdout.trim()}` : `[STATUS] ${data.message || 'Done'}`,
+        ].join('\n');
+        if (outEl) outEl.textContent = summary;
 
-  document.getElementById("btn-trigger-healthy").addEventListener("click", async () => {
+        await fetchTelemetry();
+        await runDetective(true);
+    } catch (err) {
+        if (outEl) outEl.textContent = `[HOT-PATCH ERROR] ${err.message}`;
+    } finally {
+        if (btnBar) btnBar.disabled = false;
+        if (btnInline) btnInline.disabled = false;
+    }
+}
+
+async function triggerBenchmark() {
+    const statusEl = $('bench-status');
+    const btnMain = $('btn-trigger-benchmark');
+    const btnInline = $('btn-bench-inline');
+
+    if (btnMain) btnMain.disabled = true;
+    if (btnInline) btnInline.disabled = true;
+    if (statusEl) statusEl.textContent = 'Running 1,000x 64B MsgSend() ClockCycles() round-trips on QNX target...';
+
     try {
-      const res = await fetch(`${API_BASE}/api/trigger/healthy`, { method: "POST" });
-      const data = await res.json();
-      if (!data.success && data.error) {
-        alert(data.error);
-      }
-      setTimeout(pollTelemetry, 600);
-    } catch (e) {
-      alert("Failed to dispatch healthy demo: " + e);
-    }
-  });
+        const resp = await fetch('/api/trigger/benchmark', { method: 'POST' });
+        const data = await resp.json();
+        if (!resp.ok) {
+            throw new Error(data.detail || `HTTP ${resp.status}`);
+        }
 
-  document.getElementById("btn-trigger-crash").addEventListener("click", async () => {
+        const m = data.metrics || data;
+        if ($('bench-latency-ns')) $('bench-latency-ns').textContent = `${Number(m.avg_latency_ns || 0).toFixed(1)} ns`;
+        if ($('bench-throughput')) $('bench-throughput').textContent = `${Math.round(Number(m.throughput_msg_sec || 0)).toLocaleString()} msg/s`;
+        if ($('bench-payload')) $('bench-payload').textContent = `${m.payload_bytes || 64} B`;
+        if ($('bench-cps')) $('bench-cps').textContent = formatFreq(m.cycles_per_sec);
+        if ($('bench-min-cyc')) $('bench-min-cyc').textContent = Number(m.min_cycles || 0).toLocaleString();
+        if ($('bench-avg-cyc')) $('bench-avg-cyc').textContent = Math.round(Number(m.avg_cycles || 0)).toLocaleString();
+        if ($('bench-max-cyc')) $('bench-max-cyc').textContent = Number(m.max_cycles || 0).toLocaleString();
+        if (statusEl) statusEl.textContent = `[PASS] Completed ${m.iterations || 1000} iterations directly on QNX 8.0 hardware clock.`;
+
+        await fetchTelemetry();
+    } catch (err) {
+        if (statusEl) statusEl.textContent = `[BENCH ERROR] ${err.message}`;
+    } finally {
+        if (btnMain) btnMain.disabled = false;
+        if (btnInline) btnInline.disabled = false;
+    }
+}
+
+/* ============================================================================
+ * QEMU Start & Target Demo Triggers
+ * ========================================================================= */
+async function handleStartQemu() {
+    const btn = $('btn-start-qemu');
+    const overlayBtn = $('btn-start-qemu-overlay');
+    const txt = $('btn-start-qemu-text');
+    const icon = $('btn-start-qemu-icon');
+
+    state.isBootingQemu = true;
+    if (btn) btn.disabled = true;
+    if (overlayBtn) overlayBtn.disabled = true;
+    if (icon) icon.textContent = '⏳';
+    if (txt) txt.textContent = 'BOOTING...';
+
     try {
-      const res = await fetch(`${API_BASE}/api/trigger/crash`, { method: "POST" });
-      const data = await res.json();
-      if (!data.success && data.error) {
-        alert(data.error);
-      }
-      setTimeout(pollTelemetry, 600);
-    } catch (e) {
-      alert("Failed to trigger crash demo: " + e);
+        const resp = await fetch('/api/qemu/start', { method: 'POST' });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
+        await fetchTelemetry();
+    } catch (err) {
+        const consoleEl = $('slog2-console');
+        if (consoleEl) {
+            consoleEl.innerHTML += `<div style="color:#bf616a;">[QEMU START ERROR] ${escapeHtml(err.message)}</div>`;
+        }
+    } finally {
+        state.isBootingQemu = false;
+        if (overlayBtn) overlayBtn.disabled = false;
+        if (state.latestTelemetry) {
+            updateConnectionChrome(Boolean(state.latestTelemetry.connected), state.latestTelemetry.system || {});
+        }
     }
-  });
+}
 
-  document.getElementById("btn-run-detective").addEventListener("click", async () => {
+async function triggerDemo(mode) {
     try {
-      const res = await fetch(`${API_BASE}/api/detective`, { method: "POST" });
-      const data = await res.json();
-      alert(`Deadlock Detective Report:\n${data.summary}\n${data.remediation_advice || ""}`);
-      pollTelemetry();
-    } catch (e) {
-      alert("Failed to run detective: " + e);
+        const resp = await fetch(`/api/trigger/${mode}`, { method: 'POST' });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
+        await fetchTelemetry();
+        await runDetective(true);
+    } catch (err) {
+        const consoleEl = $('slog2-console');
+        if (consoleEl) {
+            consoleEl.innerHTML += `<div style="color:#bf616a;">[TRIGGER ${escapeHtml(mode.toUpperCase())} ERROR] ${escapeHtml(err.message)}</div>`;
+        }
     }
-  });
+}
 
-  document.getElementById("btn-reset-layout").addEventListener("click", () => {
-    if (cy) {
-      cy.layout({ name: "cose", animate: true }).run();
+/* ============================================================================
+ * Panel 5: slog2 Stream Console
+ * ========================================================================= */
+function renderSlog2Console(slogTail, connected) {
+    const el = $('slog2-console');
+    const cntEl = $('slog2-line-count');
+    if (!el) return;
+
+    const rawText = slogTail || (connected ? '(slog2info returned empty buffer)' : '[OFFLINE] Waiting for QNX 8.0 SSH telemetry...');
+    const lines = String(rawText).split(/\r?\n/).filter((l, idx, arr) => l.length > 0 || idx < arr.length - 1);
+
+    if (cntEl) cntEl.textContent = `${lines.length} lines`;
+
+    const wasNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+
+    el.innerHTML = lines
+        .map((line) => {
+            const upper = line.toUpperCase();
+            let color = '#d8dee9';
+            if (upper.includes('ERROR') || upper.includes('CRITICAL') || upper.includes('SIGSEGV') || upper.includes('DEADLOCK') || upper.includes('OFFLINE')) {
+                color = '#bf616a';
+            } else if (upper.includes('WARN') || upper.includes('INVERSION')) {
+                color = '#ebcb8b';
+            } else if (upper.includes('BENCHMARK') || upper.includes('HEARTBEAT') || upper.includes('PASS') || upper.includes('HEALTHY')) {
+                color = '#a3be8c';
+            } else if (upper.includes('INFO') || upper.includes('[QNX-AEGIS]')) {
+                color = '#88c0d0';
+            }
+            return `<div style="color:${color};white-space:pre-wrap;word-break:break-word;">${escapeHtml(line)}</div>`;
+        })
+        .join('');
+
+    if (wasNearBottom) {
+        el.scrollTop = el.scrollHeight;
     }
-  });
+}
 
-  document.getElementById("btn-poll-refresh").addEventListener("click", () => {
-    pollTelemetry();
-  });
+/* ============================================================================
+ * Tab 3: MCP JSON-RPC Studio
+ * ========================================================================= */
+async function loadMcpTools() {
+    const listEl = $('mcp-tools-list');
+    if (!listEl) return;
+    listEl.innerHTML = '<div style="color:#81a1c1;">Loading FastMCP tool schemas from /api/mcp/tools...</div>';
 
-  document.getElementById("btn-clear-logs").addEventListener("click", () => {
-    slogConsole.innerHTML = "";
-  });
+    const t0 = performance.now();
+    try {
+        const resp = await fetch('/api/mcp/tools');
+        const data = await resp.json();
+        const elapsed = Math.round(performance.now() - t0);
+        if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
 
-  // Initialization
-  document.addEventListener("DOMContentLoaded", () => {
-    initCytoscape();
-    connectWebSocket();
-    pollTelemetry();
-    setInterval(pollTelemetry, 3000);
-  });
-})();
+        state.mcpTools = Array.isArray(data.tools) ? data.tools : [];
+        if ($('mcp-studio-latency')) $('mcp-studio-latency').textContent = `TOOLS: ${state.mcpTools.length} · ${elapsed} ms`;
+
+        if (!state.mcpTools.length) {
+            listEl.innerHTML = '<div style="color:#ebcb8b;">No MCP tools returned.</div>';
+            return;
+        }
+
+        listEl.innerHTML = state.mcpTools
+            .map(
+                (tool, idx) => `<button type="button" class="mcp-tool-item" data-idx="${idx}" style="display:block;width:100%;text-align:left;padding:8px;margin-bottom:6px;background:#11151d;border:1px solid #3b4252;color:#e5e9f0;cursor:pointer;font-family:inherit;">
+                    <div style="color:#88c0d0;font-weight:700;font-size:12px;">${escapeHtml(tool.name)}</div>
+                    <div style="color:#81a1c1;font-size:11px;margin-top:2px;line-height:1.35;">${escapeHtml((tool.description || '').slice(0, 120))}</div>
+                </button>`
+            )
+            .join('');
+
+        listEl.querySelectorAll('.mcp-tool-item').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                selectMcpTool(Number(btn.dataset.idx));
+            });
+        });
+
+        selectMcpTool(0);
+    } catch (err) {
+        listEl.innerHTML = `<div style="color:#bf616a;">Failed to load MCP tools: ${escapeHtml(err.message)}</div>`;
+    }
+}
+
+function selectMcpTool(index) {
+    const tool = state.mcpTools[index];
+    if (!tool) return;
+    state.selectedMcpTool = tool;
+
+    document.querySelectorAll('#mcp-tools-list .mcp-tool-item').forEach((btn) => {
+        const active = Number(btn.dataset.idx) === index;
+        btn.style.borderColor = active ? '#88c0d0' : '#3b4252';
+        btn.style.background = active ? '#1b222d' : '#11151d';
+    });
+
+    if ($('mcp-selected-tool')) $('mcp-selected-tool').textContent = tool.name;
+
+    // Build default argument object from schema properties
+    const defaultArgs = {};
+    const props = tool.input_schema?.properties || {};
+    for (const [k, spec] of Object.entries(props)) {
+        if (spec && spec.default !== undefined) {
+            defaultArgs[k] = spec.default;
+        } else if (spec?.type === 'integer' || spec?.type === 'number') {
+            defaultArgs[k] = 0;
+        } else if (spec?.type === 'boolean') {
+            defaultArgs[k] = false;
+        } else if (spec?.type === 'array') {
+            defaultArgs[k] = [];
+        } else {
+            defaultArgs[k] = '';
+        }
+    }
+
+    const argsInput = $('mcp-args-input');
+    if (argsInput) {
+        argsInput.value = JSON.stringify(defaultArgs, null, 2);
+    }
+    updateMcpRequestPreview();
+}
+
+function updateMcpRequestPreview() {
+    const reqEl = $('mcp-jsonrpc-request');
+    const argsEl = $('mcp-args-input');
+    if (!reqEl) return;
+
+    let parsedArgs = {};
+    try {
+        parsedArgs = JSON.parse(argsEl?.value || '{}');
+    } catch (_) {
+        parsedArgs = { _invalid_json: true };
+    }
+
+    const payload = {
+        jsonrpc: '2.0',
+        id: state.rpcSeq,
+        method: 'tools/call',
+        params: {
+            name: state.selectedMcpTool ? state.selectedMcpTool.name : 'select_a_tool',
+            arguments: parsedArgs,
+        },
+    };
+    reqEl.textContent = JSON.stringify(payload, null, 2);
+}
+
+async function invokeSelectedMcpTool() {
+    if (!state.selectedMcpTool) return;
+    const argsEl = $('mcp-args-input');
+    const respEl = $('mcp-jsonrpc-response');
+    const metaEl = $('mcp-response-meta');
+    const btn = $('btn-invoke-mcp-tool');
+
+    let parsedArgs = {};
+    try {
+        parsedArgs = JSON.parse(argsEl?.value || '{}');
+    } catch (err) {
+        if (respEl) respEl.textContent = `Argument JSON parse error: ${err.message}`;
+        return;
+    }
+
+    const rpcId = state.rpcSeq++;
+    updateMcpRequestPreview();
+
+    if (btn) btn.disabled = true;
+    if (metaEl) metaEl.textContent = 'Invoking...';
+
+    const t0 = performance.now();
+    try {
+        const resp = await fetch('/api/mcp/call', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                id: rpcId,
+                tool: state.selectedMcpTool.name,
+                arguments: parsedArgs,
+            }),
+        });
+        const data = await resp.json();
+        const elapsed = Math.round(performance.now() - t0);
+        if (metaEl) metaEl.textContent = `HTTP ${resp.status} · ${elapsed} ms`;
+        if ($('mcp-studio-latency')) $('mcp-studio-latency').textContent = `LAST RPC: ${elapsed} ms`;
+        if (respEl) respEl.textContent = JSON.stringify(data, null, 2);
+    } catch (err) {
+        if (metaEl) metaEl.textContent = 'ERR';
+        if (respEl) respEl.textContent = `RPC failure: ${err.message}`;
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+async function runQuickRestProbe(endpoint, method) {
+    const reqEl = $('mcp-jsonrpc-request');
+    const respEl = $('mcp-jsonrpc-response');
+    const metaEl = $('mcp-response-meta');
+
+    if (reqEl) reqEl.textContent = `${method} ${endpoint}\nAccept: application/json`;
+    if (metaEl) metaEl.textContent = 'Requesting...';
+
+    const t0 = performance.now();
+    try {
+        const resp = await fetch(endpoint, { method });
+        const text = await resp.text();
+        const elapsed = Math.round(performance.now() - t0);
+        if (metaEl) metaEl.textContent = `HTTP ${resp.status} · ${elapsed} ms`;
+        if ($('mcp-studio-latency')) $('mcp-studio-latency').textContent = `REST PROBE: ${elapsed} ms`;
+        if (respEl) {
+            try {
+                respEl.textContent = JSON.stringify(JSON.parse(text), null, 2);
+            } catch (_) {
+                respEl.textContent = text;
+            }
+        }
+    } catch (err) {
+        if (metaEl) metaEl.textContent = 'ERR';
+        if (respEl) respEl.textContent = `HTTP request error: ${err.message}`;
+    }
+}

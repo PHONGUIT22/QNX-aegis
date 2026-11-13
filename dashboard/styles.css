@@ -1,22 +1,27 @@
 /* ==============================================================================
-   QNX-Aegis: Real-Time Dashboard Custom Styles
-   Dark-mode cybernetic theme for QNX 8.0 Microkernel Telemetry
+   QNX-Aegis: ZOC Terminal Workstation + btop Microkernel TUI Stylesheet
+   Crisp #090b0e background, #3b4252 box borders, JetBrains Mono / Fira Code
    ============================================================================== */
 
 :root {
-  --bg-primary: #0a0d14;
-  --bg-secondary: #111622;
-  --bg-card: #161d2d;
-  --bg-card-hover: #1c2538;
-  --border-color: #242f45;
-  --accent-cyan: #06b6d4;
-  --accent-blue: #3b82f6;
-  --accent-green: #10b981;
-  --accent-amber: #f59e0b;
-  --accent-red: #ef4444;
-  --accent-purple: #8b5cf6;
-  --text-main: #f3f4f6;
-  --text-muted: #9ca3af;
+  --bg-term: #090b0e;
+  --bg-panel: #0d1117;
+  --bg-chrome: #161b22;
+  --bg-chrome-hi: #1f2733;
+  --bg-hover: #1a2230;
+  --border-box: #3b4252;
+  --border-hi: #5e81ac;
+  --text-main: #d8dee9;
+  --text-bright: #eceff4;
+  --text-dim: #7b88a1;
+  --cyan: #88c0d0;
+  --ice: #38bdf8;
+  --green: #a3be8c;
+  --emerald: #10b981;
+  --amber: #ebcb8b;
+  --red: #bf616a;
+  --rose: #f43f5e;
+  --purple: #b48ead;
 }
 
 * {
@@ -25,60 +30,709 @@
   padding: 0;
 }
 
-body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  background-color: var(--bg-primary);
+body.zoc-body {
+  font-family: "JetBrains Mono", "Fira Code", "Cascadia Mono", "Consolas", "Courier New", monospace;
+  background-color: var(--bg-term);
   color: var(--text-main);
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+  font-size: 12px;
+  line-height: 1.4;
   overflow-x: hidden;
 }
 
-/* Scrollbar customization */
+/* Scrollbar styling */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: var(--bg-primary);
+  background: var(--bg-term);
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--border-color);
-  border-radius: 3px;
+  background: var(--border-box);
+  border-radius: 2px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--accent-cyan);
+  background: var(--cyan);
 }
 
-/* Pulsing Status Badges */
-.pulse-green {
-  box-shadow: 0 0 10px rgba(16, 185, 129, 0.5);
-  animation: pulse-green-anim 2s infinite;
-}
-@keyframes pulse-green-anim {
-  0%, 100% { box-shadow: 0 0 5px rgba(16, 185, 129, 0.4); }
-  50% { box-shadow: 0 0 15px rgba(16, 185, 129, 0.8); }
+/* ==================== ZOC WINDOW CHROME ==================== */
+.zoc-titlebar {
+  background: linear-gradient(180deg, #212836 0%, #151a23 100%);
+  border-bottom: 1px solid #2e3440;
+  padding: 5px 10px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
-.pulse-red {
-  box-shadow: 0 0 12px rgba(239, 68, 68, 0.6);
-  animation: pulse-red-anim 1s infinite;
+.zoc-titlebar-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
-@keyframes pulse-red-anim {
-  0%, 100% { box-shadow: 0 0 6px rgba(239, 68, 68, 0.4); }
-  50% { box-shadow: 0 0 20px rgba(239, 68, 68, 0.9); }
+
+.zoc-app-icon {
+  background: linear-gradient(135deg, #0ea5e9, #2563eb);
+  color: #ffffff;
+  font-weight: 800;
+  font-size: 10px;
+  padding: 2px 5px;
+  border-radius: 3px;
+  border: 1px solid #38bdf8;
+  letter-spacing: 0.04em;
+}
+
+.zoc-title-text {
+  font-size: 12px;
+  color: #e5e9f0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.zoc-titlebar-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.zoc-win-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 6px;
+}
+.win-btn {
+  width: 22px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #232a36;
+  border: 1px solid #3b4252;
+  border-radius: 2px;
+  color: #9aa5ce;
+  font-size: 11px;
+  user-select: none;
+}
+.win-close {
+  color: #fca5a5;
+}
+
+/* ZOC Status Pills */
+.zoc-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid var(--border-box);
+  background: #0d1117;
+}
+.zoc-pill-muted { color: #9ca3af; border-color: #3b4252; }
+.zoc-pill-green { color: #34d399; border-color: #065f46; background: rgba(6, 78, 59, 0.35); }
+.zoc-pill-red   { color: #f87171; border-color: #991b1b; background: rgba(127, 29, 29, 0.35); }
+.zoc-pill-amber { color: #fbbf24; border-color: #92400e; background: rgba(120, 53, 15, 0.35); }
+.zoc-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 9999px;
+  display: inline-block;
+}
+
+/* ZOC Menu Bar */
+.zoc-menubar {
+  background: #141922;
+  border-bottom: 1px solid #2b3240;
+  padding: 3px 12px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+}
+.zoc-menu-items {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  color: #aeb7c7;
+}
+.zoc-menu-item {
+  cursor: default;
+  padding: 1px 4px;
+  border-radius: 2px;
+}
+.zoc-menu-item:hover {
+  background: #252d3b;
+  color: #ffffff;
+}
+.zoc-menubar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.zoc-poll-ctrl {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.zoc-sep {
+  color: #3b4252;
+}
+
+/* ZOC Session Tabs */
+.zoc-tabs-bar {
+  background: #0f131a;
+  border-bottom: 1px solid #3b4252;
+  padding: 4px 10px 0 10px;
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  overflow-x: auto;
+}
+.zoc-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 12px;
+  background: #161c26;
+  border: 1px solid #2e3440;
+  border-bottom: none;
+  border-top-left-radius: 4px;
+  border-top-right-radius: 4px;
+  color: #8b949e;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+.zoc-tab:hover {
+  background: #1d2432;
+  color: #d8dee9;
+}
+.zoc-tab.active {
+  background: var(--bg-term);
+  color: #ffffff;
+  font-weight: 700;
+  border-color: var(--cyan);
+  border-bottom: 2px solid var(--bg-term);
+  margin-bottom: -1px;
+}
+.tab-led {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #4b5563;
+}
+.led-active { background: #10b981; box-shadow: 0 0 6px #10b981; }
+.led-cyan   { background: #38bdf8; }
+.led-purple { background: #a855f7; }
+.tab-close {
+  font-size: 12px;
+  color: #6b7280;
+  margin-left: 2px;
+}
+.zoc-tabs-spacer {
+  margin-left: auto;
+  padding-bottom: 5px;
+  white-space: nowrap;
+}
+
+/* ZOC Bookmark Action Bar */
+.zoc-bookmark-bar {
+  background: #11161f;
+  border-bottom: 1px solid #2e3440;
+  padding: 6px 10px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.zoc-bookmark-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.zoc-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid #3b4252;
+  background: #19202b;
+  color: #e5e9f0;
+  cursor: pointer;
+  transition: all 0.12s ease;
+  font-family: inherit;
+}
+.zoc-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  filter: brightness(1.15);
+}
+.zoc-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.btn-xs {
+  padding: 2px 8px;
+  font-size: 10.5px;
+}
+.zoc-mini-btn {
+  padding: 1px 6px;
+  border: 1px solid #3b4252;
+  background: #161b22;
+  border-radius: 2px;
+  font-size: 10.5px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.zoc-mini-btn:hover {
+  background: #242c3a;
+  border-color: var(--cyan);
+}
+
+.zoc-btn-cyan   { background: #0c3547; border-color: #0891b2; color: #cffafe; }
+.zoc-btn-red    { background: #4c111d; border-color: #dc2626; color: #ffe4e6; }
+.zoc-btn-green  { background: #0b3b2c; border-color: #059669; color: #d1fae5; }
+.zoc-btn-amber  { background: #452809; border-color: #d97706; color: #fef3c7; }
+.zoc-btn-ice    { background: #102a43; border-color: #38bdf8; color: #bae6fd; }
+.zoc-btn-purple { background: #2e184b; border-color: #9333ea; color: #ede9fe; }
+.zoc-btn-patch  { background: #1b3a2e; border-color: #34d399; color: #a7f3d0; }
+.zoc-btn-blue   { background: #172554; border-color: #3b82f6; color: #dbeafe; }
+.zoc-btn-slate  { background: #1e2430; border-color: #4c566a; color: #d8dee9; }
+
+/* ==================== MAIN TERMINAL WORKSPACE & BTOP GRID ==================== */
+.zoc-workspace {
+  flex: 1;
+  padding: 12px 10px 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 1920px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.btop-grid {
+  display: grid;
+  gap: 12px 10px;
+  flex: 1;
+}
+
+/* Tab 1 Layout: Full 5-Panel btop View */
+.btop-grid.mode-btop {
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  grid-template-areas:
+    "cpu cpu cpu cpu cpu det det det det det det det"
+    "topo topo topo topo topo topo topo proc proc proc proc proc"
+    "slog slog slog slog slog slog slog slog slog slog slog slog";
+}
+
+/* Tab 2 Layout: Focused Cytoscape IPC Topology + ⁴proc */
+.btop-grid.mode-topology {
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  grid-template-areas:
+    "topo topo topo topo topo topo topo topo proc proc proc proc";
+}
+.btop-grid.mode-topology .area-cpu,
+.btop-grid.mode-topology .area-detective,
+.btop-grid.mode-topology .area-slog2 {
+  display: none !important;
+}
+.btop-grid.mode-topology #cy-container {
+  height: calc(100vh - 245px);
+  min-height: 540px;
+}
+.btop-grid.mode-topology .proc-scroll {
+  max-height: calc(100vh - 210px);
+}
+
+.area-cpu       { grid-area: cpu; }
+.area-detective { grid-area: det; }
+.area-topo      { grid-area: topo; }
+.area-proc      { grid-area: proc; }
+.area-slog2     { grid-area: slog; }
+
+@media (max-width: 1100px) {
+  .btop-grid.mode-btop,
+  .btop-grid.mode-topology {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "cpu"
+      "det"
+      "topo"
+      "proc"
+      "slog";
+  }
+}
+
+/* ==================== BTOP TUI BOX PANELS ==================== */
+.btop-panel {
+  position: relative;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-box);
+  border-radius: 3px;
+  display: flex;
+  flex-direction: column;
+  padding-top: 10px;
+  transition: border-color 0.2s ease;
+}
+.btop-panel:hover {
+  border-color: var(--border-hi);
+}
+.btop-panel.panel-alert {
+  border-color: var(--rose) !important;
+  box-shadow: 0 0 14px rgba(244, 63, 94, 0.2);
+}
+
+.btop-box-header {
+  position: absolute;
+  top: -10px;
+  left: 8px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  pointer-events: none;
+}
+.btop-box-header > * {
+  pointer-events: auto;
+}
+
+.btop-box-title {
+  background: var(--bg-term);
+  padding: 0 6px;
+  color: var(--text-bright);
+  font-weight: 700;
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.btop-sup {
+  color: var(--rose);
+  font-weight: 800;
+  margin-right: 1px;
+}
+
+.btop-box-meta {
+  background: var(--bg-term);
+  padding: 0 6px;
+  color: var(--text-dim);
+  font-size: 10.5px;
+}
+
+.btop-status-tag {
+  background: var(--bg-term);
+  padding: 0 6px;
+  border: 1px solid var(--border-box);
+  border-radius: 2px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #9ca3af;
+}
+
+.btop-panel-body {
+  padding: 8px 10px 10px 10px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* ==================== PANEL 1: KERNEL-CPU & BRAILLE SPARKLINE ==================== */
+.cpu-sys-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 11px;
+  padding-bottom: 4px;
+  border-bottom: 1px dashed #252b36;
+}
+
+.braille-card {
+  background: #080a0d;
+  border: 1px solid #262c38;
+  border-radius: 2px;
+  padding: 6px 8px;
+}
+.braille-header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  margin-bottom: 3px;
+}
+.braille-wave {
+  font-size: 14px;
+  line-height: 1.15;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  user-select: none;
+}
+
+.ascii-meters {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.meter-row {
+  display: grid;
+  grid-template-columns: 62px 1fr 38px;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+.meter-label {
+  font-weight: 700;
+}
+.meter-bar {
+  letter-spacing: 1px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.meter-val {
+  text-align: right;
+}
+
+/* ==================== PANEL 3: DETECTIVE & CLOCKCYCLES BENCHMARK ==================== */
+.detective-split {
+  display: grid;
+  grid-template-columns: 1.25fr 1fr;
+  gap: 10px;
+  height: 100%;
+}
+@media (max-width: 768px) {
+  .detective-split {
+    grid-template-columns: 1fr;
+  }
+}
+
+.detective-col, .benchmark-col {
+  background: #090c10;
+  border: 1px solid #252b36;
+  border-radius: 2px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.sub-box-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--cyan);
+  border-bottom: 1px solid #222834;
+  padding-bottom: 4px;
+}
+
+.pi-badge {
+  padding: 1px 6px;
+  border-radius: 2px;
+  font-size: 10px;
+  font-weight: 700;
+}
+.pi-clean { background: #0d2b22; color: #34d399; border: 1px solid #065f46; }
+.pi-warn  { background: #452309; color: #fbbf24; border: 1px solid #d97706; }
+
+.pi-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 95px;
+  overflow-y: auto;
+}
+.pi-item {
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid #b45309;
+  border-radius: 2px;
+  padding: 4px 6px;
+  font-size: 10.5px;
+  color: #fde68a;
+}
+
+.ai-patch-box {
+  background: rgba(159, 18, 57, 0.16);
+  border: 1px solid #be123c;
+  border-radius: 2px;
+  padding: 7px 8px;
+  font-size: 11px;
+}
+
+.hotpatch-log {
+  background: #06080b;
+  border: 1px solid #059669;
+  border-radius: 2px;
+  padding: 6px 8px;
+  font-size: 10.5px;
+  color: #a7f3d0;
+  white-space: pre-wrap;
+  max-height: 110px;
+  overflow-y: auto;
+}
+
+.bench-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.bench-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #0d131a;
+  border: 1px solid #263142;
+  padding: 6px 8px;
+  border-radius: 2px;
+}
+.bench-stats-table {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 8px;
+  font-size: 10.5px;
+}
+
+/* ==================== PANEL 2: CYTOSCAPE IPC TOPOLOGY ==================== */
+#cy-container, .cy-box {
+  width: 100%;
+  height: 410px;
+  background-color: #080a0e;
+  background-image:
+    linear-gradient(to right, rgba(59, 66, 82, 0.14) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(59, 66, 82, 0.14) 1px, transparent 1px);
+  background-size: 24px 24px;
+  border: 1px solid #2b3240;
+  border-radius: 2px;
+  position: relative;
+  overflow: hidden;
+}
+
+.cy-offline-mask {
+  position: absolute;
+  inset: 0;
+  background: rgba(9, 11, 14, 0.92);
+  backdrop-filter: blur(2px);
+  z-index: 15;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+.offline-term-box {
+  border: 1px solid #be123c;
+  background: #0d1117;
+  padding: 20px 24px;
+  border-radius: 3px;
+  max-width: 460px;
+  text-align: center;
+  box-shadow: 0 0 24px rgba(190, 18, 60, 0.25);
+}
+
+.node-inspector-bar {
+  background: #080a0e;
+  border: 1px solid #2b3240;
+  border-radius: 2px;
+  padding: 6px 10px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+}
+
+/* ==================== PANEL 4: PROC (PIDIN) TABLE ==================== */
+.btop-search-input {
+  background: #080a0e;
+  border: 1px solid var(--border-box);
+  border-radius: 2px;
+  color: #e5e9f0;
+  font-size: 10.5px;
+  padding: 1px 6px;
+  width: 150px;
+  outline: none;
+  font-family: inherit;
+}
+.btop-search-input:focus {
+  border-color: var(--cyan);
+}
+
+.proc-scroll {
+  max-height: 455px;
+  overflow-y: auto;
+  border: 1px solid #232936;
+  background: #080a0e;
+}
+
+.btop-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  text-align: left;
+}
+.btop-table thead th {
+  position: sticky;
+  top: 0;
+  background: #141922;
+  color: var(--cyan);
+  font-weight: 700;
+  padding: 5px 6px;
+  border-bottom: 1px solid var(--border-box);
+  z-index: 2;
+}
+.btop-table tbody tr {
+  border-bottom: 1px solid #161b24;
+  cursor: pointer;
+  transition: background 0.1s ease;
+}
+.btop-table tbody tr:hover {
+  background: var(--bg-hover);
+}
+.btop-table tbody tr.proc-selected {
+  background: rgba(56, 189, 248, 0.18);
+  outline: 1px solid var(--ice);
+}
+.btop-table tbody tr.proc-deadlocked {
+  background: rgba(239, 68, 68, 0.15);
+}
+.btop-table td {
+  padding: 3.5px 6px;
+  white-space: nowrap;
 }
 
 /* Microkernel Thread State Tags */
 .state-tag {
   display: inline-block;
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 0.75rem;
+  padding: 1px 5px;
+  border-radius: 2px;
+  font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.03em;
 }
 .state-RUNNING { background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid #059669; }
 .state-READY   { background: rgba(59, 130, 246, 0.2); color: #60a5fa; border: 1px solid #2563eb; }
@@ -86,38 +740,123 @@ body {
 .state-SEND    { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid #d97706; }
 .state-REPLY   { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid #dc2626; }
 .state-MUTEX   { background: rgba(139, 92, 246, 0.2); color: #c084fc; border: 1px solid #7c3aed; }
+.state-CONDVAR,
+.state-SEM,
+.state-INTR,
+.state-WAITPAGE,
+.state-NANOSLEEP,
+.state-UNKNOWN { background: rgba(100, 116, 139, 0.2); color: #cbd5e1; border: 1px solid #475569; }
 
-/* Cytoscape Canvas */
-#cy-container {
-  width: 100%;
-  height: 520px;
-  background: radial-gradient(circle at 50% 50%, #151c2c 0%, #0c101a 100%);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  position: relative;
-  overflow: hidden;
-}
-
-/* Slog2 Terminal Box */
+/* ==================== PANEL 5: SLOG2 TERMINAL STREAM ==================== */
 .terminal-window {
-  background: #06090e;
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  font-family: "Consolas", "Courier New", monospace;
-  font-size: 0.8rem;
-  height: 240px;
+  background: #06080b;
+  border: 1px solid #252b36;
+  border-radius: 2px;
+  font-family: inherit;
+  font-size: 11.5px;
+  height: 175px;
   overflow-y: auto;
-  padding: 12px;
+  padding: 8px 10px;
   color: #a7f3d0;
   line-height: 1.4;
 }
-
 .terminal-line {
-  margin-bottom: 4px;
+  margin-bottom: 2px;
   white-space: pre-wrap;
   word-break: break-all;
 }
-.terminal-line.info { color: #93c5fd; }
-.terminal-line.warn { color: #fde047; }
+.terminal-line.info  { color: #93c5fd; }
+.terminal-line.warn  { color: #fde047; }
 .terminal-line.error { color: #f87171; font-weight: bold; }
-.terminal-line.crit { color: #f43f5e; font-weight: bold; background: rgba(244, 63, 94, 0.1); }
+.terminal-line.crit  { color: #fda4af; font-weight: bold; background: rgba(244, 63, 94, 0.14); padding: 1px 4px; }
+
+/* ==================== TAB 3: MCP JSON-RPC STUDIO ==================== */
+.mcp-studio-grid {
+  display: grid;
+  grid-template-columns: 1fr 1.35fr;
+  gap: 10px;
+  flex: 1;
+}
+@media (max-width: 1000px) {
+  .mcp-studio-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.mcp-tools-pane, .mcp-tester-pane {
+  min-height: calc(100vh - 200px);
+}
+.mcp-tool-card {
+  background: #080a0e;
+  border: 1px solid #2b3240;
+  border-radius: 2px;
+  padding: 8px 10px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+.mcp-tool-card:hover {
+  border-color: var(--purple);
+  background: #131822;
+}
+.mcp-tool-card.selected {
+  border-color: var(--cyan);
+  background: #101925;
+}
+.btop-input, .btop-textarea {
+  width: 100%;
+  background: #06080b;
+  border: 1px solid var(--border-box);
+  border-radius: 2px;
+  color: #e5e9f0;
+  padding: 5px 8px;
+  font-family: inherit;
+  font-size: 11px;
+  outline: none;
+}
+.btop-input:focus, .btop-textarea:focus {
+  border-color: var(--cyan);
+}
+.jsonrpc-code {
+  background: #06080b;
+  border: 1px solid #262c38;
+  border-radius: 2px;
+  padding: 8px;
+  font-size: 11px;
+  color: #93c5fd;
+  overflow: auto;
+  max-height: 360px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ==================== BOTTOM ZOC STATUS BAR ==================== */
+.zoc-statusbar {
+  background: #141922;
+  border-top: 1px solid #3b4252;
+  padding: 4px 12px;
+  font-size: 11px;
+  color: #aeb7c7;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.zoc-statusbar-left, .zoc-statusbar-right {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.zoc-bar-sep {
+  color: #4c566a;
+}
+
+/* Pulsing Status Animations */
+.pulse-red {
+  box-shadow: 0 0 10px rgba(239, 68, 68, 0.55);
+  animation: pulse-red-anim 1.2s infinite;
+}
+@keyframes pulse-red-anim {
+  0%, 100% { box-shadow: 0 0 4px rgba(239, 68, 68, 0.4); }
+  50%      { box-shadow: 0 0 16px rgba(239, 68, 68, 0.9); }
+}

@@ -12,6 +12,7 @@ all: dirs
 	cp demos/ipc_deadlock_demo $(BINDIR)/
 	cp demos/ipc_healthy_demo $(BINDIR)/
 	cp demos/slog2_crash_demo $(BINDIR)/
+	cp demos/ipc_benchmark_demo $(BINDIR)/
 	@echo "All QNX 8.0 target binaries successfully compiled into $(BINDIR)"
 
 dirs:

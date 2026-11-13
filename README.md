@@ -25,7 +25,7 @@ When complex distributed actor systems or resource managers communicate across m
 **QNX-Aegis** bridges this gap by marrying modern **AI Developer Agents** (via Anthropic's **Model Context Protocol - MCP**) directly with the **QNX 8.0 Microkernel**:
 1. **Target Side (`qnx-target/`):** A lightweight C Resource Manager daemon exposing `/dev/qnx_inspector`. It inspects kernel thread states via `/proc`, reconstructs the IPC channel dependency graph, and queries the `slog2` high-performance ring buffer.
 2. **Host Side (`mcp-server/`):** An MCP server & FastAPI telemetry bridge running on Windows. It orchestrates `qcc` cross-compilation (`-Vgcc_ntox86_64`), manages QEMU deployment over SSH, executes graph cycle detection algorithms to pinpoint exact circular wait chains, and exposes structured diagnostic tools directly to AI models (Claude, Cursor, Antigravity).
-3. **Live Dashboard (`dashboard/`):** A real-time Cytoscape.js dark-mode canvas visualizing channel topologies, live thread blocking transitions, and instant AI automated fixes.
+3. **ZOC Workstation + `btop` TUI Dashboard (`dashboard/`):** A three-tab dark terminal interface (`1: btop-kernel-monitor`, `2: ipc-cytoscape-topology`, `3: mcp-jsonrpc-studio`) with Unicode Braille sparklines, ASCII meters, searchable `⁴proc (pidin)` two-way Cytoscape sync, Priority Inversion auditing, hardware `ClockCycles()` IPC benchmarking, and One-Click QCC AI Hot-Patching under a strict zero-simulation policy.
 
 ---
 
@@ -41,13 +41,13 @@ flowchart TB
         subgraph MCP["QNX-Aegis MCP Server & Telemetry Bridge"]
             Server["MCP FastMCP Server<br/>(JSON-RPC 2.0 / stdio / SSE)"]
             Compiler["QCC Cross-Compiler Engine<br/>(qcc -Vgcc_ntox86_64)"]
-            Detective["Deadlock Detective<br/>(Tarjan's Directed Cycle Detection)"]
+            Detective["Deadlock & Priority Detective<br/>(Tarjan Cycles + Inversion Audit)"]
             Bridge["FastAPI & WebSocket Server<br/>(:8000)"]
             Paramiko["QEMU SSH/SCP Transport<br/>(Paramiko Bridge)"]
         end
 
         subgraph UI["Developer Host Tooling"]
-            Dashboard["Real-Time Web Dashboard<br/>(Tailwind + Cytoscape.js)"]
+            Dashboard["ZOC + btop TUI Dashboard<br/>(Braille + Cytoscape.js + MCP Studio)"]
         end
     end
 
@@ -88,9 +88,10 @@ QNX-Aegis is purpose-built for **QNX Neutrino RTOS 8.0** and relies fundamentall
 | QNX 8.0 Technology | Target Source File | Exact APIs & Mechanisms Used | Description |
 |---|---|---|---|
 | **QNX Resource Manager** | [`qnx-target/inspector-daemon/main.c`](file:///d:/UIT/NamBonUIT/QNX-Aegis/qnx-target/inspector-daemon/main.c) | `dispatch_create()`, `resmgr_attach()`, `iofunc_func_init()`, `resmgr_context_alloc()`, `resmgr_block()` | Registers `/dev/qnx_inspector` in the QNX namespace to provide zero-copy JSON telemetry streaming via standard `io_read` callbacks. |
-| **QNX Native IPC Passing** | [`qnx-target/demos/ipc_deadlock_demo.c`](file:///d:/UIT/NamBonUIT/QNX-Aegis/qnx-target/demos/ipc_deadlock_demo.c)<br/>[`qnx-target/demos/ipc_healthy_demo.c`](file:///d:/UIT/NamBonUIT/QNX-Aegis/qnx-target/demos/ipc_healthy_demo.c) | `ChannelCreate()`, `ConnectAttach()`, `MsgSend()`, `MsgReceive()`, `MsgReply()` | Implements deterministic synchronous message transactions and demonstrates mutual `STATE_REPLY` / `STATE_SEND` circular wait states. |
-| **QNX slog2 (System Logger 2)** | [`qnx-target/inspector-daemon/slog2_reader.c`](file:///d:/UIT/NamBonUIT/QNX-Aegis/qnx-target/inspector-daemon/slog2_reader.c)<br/>[`qnx-target/demos/slog2_crash_demo.c`](file:///d:/UIT/NamBonUIT/QNX-Aegis/qnx-target/demos/slog2_crash_demo.c) | `slog2_register()`, `slog2fa()`, `slog2c()`, `slog2_buffer_t` | Emits high-frequency zero-copy structured system logs into categorized QNX 8.0 slog2 ring buffers and reads them via `slog2info`. |
-| **Microkernel Process Inspection** | [`qnx-target/inspector-daemon/ipc_analyzer.c`](file:///d:/UIT/NamBonUIT/QNX-Aegis/qnx-target/inspector-daemon/ipc_analyzer.c) | `devctl(fd, DCMD_PROC_SYSINFO)`, `DCMD_PROC_TIDSTATUS`, `STATE_SEND`, `STATE_REPLY`, `STATE_RECEIVE` | Queries microkernel thread control blocks (`procnto`) directly to extract thread blocking states, channel IDs, and target server PIDs. |
+| **QNX Native IPC Passing** | [`qnx-target/demos/ipc_deadlock_demo.c`](file:///d:/UIT/NamBonUIT/QNX-Aegis/qnx-target/demos/ipc_deadlock_demo.c)<br/>[`qnx-target/demos/ipc_healthy_demo.c`](file:///d:/UIT/NamBonUIT/QNX-Aegis/qnx-target/demos/ipc_healthy_demo.c)<br/>[`qnx-target/demos/ipc_benchmark_demo.c`](file:///d:/UIT/NamBonUIT/QNX-Aegis/qnx-target/demos/ipc_benchmark_demo.c) | `ChannelCreate()`, `ConnectAttach()`, `MsgSend()`, `MsgReceive()`, `MsgReply()` | Implements deterministic synchronous message transactions, mutual `STATE_REPLY` / `STATE_SEND` circular deadlocks, and 1,000-iteration 64B round-trip latency benchmarks. |
+| **QNX Hardware Timing** | [`qnx-target/demos/ipc_benchmark_demo.c`](file:///d:/UIT/NamBonUIT/QNX-Aegis/qnx-target/demos/ipc_benchmark_demo.c) | `ClockCycles()`, `SYSPAGE_ENTRY(qtime)->cycles_per_sec` | Measures sub-microsecond kernel IPC round-trip latency directly from the x86_64/QNX system page cycle counter without synthetic timers. |
+| **QNX slog2 (System Logger 2)** | [`qnx-target/inspector-daemon/slog2_reader.c`](file:///d:/UIT/NamBonUIT/QNX-Aegis/qnx-target/inspector-daemon/slog2_reader.c)<br/>[`qnx-target/demos/slog2_crash_demo.c`](file:///d:/UIT/NamBonUIT/QNX-Aegis/qnx-target/demos/slog2_crash_demo.c) | `slog2_register()`, `slog2f()`, `slog2c()`, `slog2_buffer_t` | Emits high-frequency zero-copy structured system logs into categorized QNX 8.0 slog2 ring buffers and reads them via `slog2info`. |
+| **Microkernel Process Inspection & Scheduling Audit** | [`qnx-target/inspector-daemon/ipc_analyzer.c`](file:///d:/UIT/NamBonUIT/QNX-Aegis/qnx-target/inspector-daemon/ipc_analyzer.c)<br/>[`mcp-server/src/deadlock_detective.py`](file:///d:/UIT/NamBonUIT/QNX-Aegis/mcp-server/src/deadlock_detective.py) | `devctl(fd, DCMD_PROC_SYSINFO)`, `DCMD_PROC_TIDSTATUS`, `STATE_SEND`, `STATE_REPLY`, `STATE_RECEIVE` | Queries microkernel thread control blocks (`procnto`) directly to extract thread states, channel IDs, wait-for cycles, and scheduling priority inversions. |
 | **QNX Cross-Compilation** | [`scripts/build-target.ps1`](file:///d:/UIT/NamBonUIT/QNX-Aegis/scripts/build-target.ps1)<br/>[`mcp-server/src/qcc_compiler.py`](file:///d:/UIT/NamBonUIT/QNX-Aegis/mcp-server/src/qcc_compiler.py) | `qcc -Vgcc_ntox86_64`, `qcc -Vllvm_ntox86_64`, `-lslog2` | Uses native QNX SDP 8.0 cross-compiler drivers with target architecture specifications and QNX library linkers. |
 
 ---
@@ -124,6 +125,7 @@ QNX-Aegis/
 │   └── demos/                               # Diagnostic & demo binaries
 │       ├── Makefile
 │       ├── ipc_deadlock_demo.c              # Intentional circular MsgSend deadlock
+│       ├── ipc_benchmark_demo.c             # ClockCycles() 1,000x 64B MsgSend benchmark
 │       ├── ipc_healthy_demo.c               # Clean ChannelCreate / MsgSend / MsgReply loop
 │       └── slog2_crash_demo.c               # Slog2 warning logger + deliberate fault trigger
 │
@@ -172,7 +174,7 @@ Cross-compile the native QNX Resource Manager and Demo applications using `qcc`:
 ```powershell
 .\scripts\build-target.ps1
 ```
-This produces `qnx_inspector`, `ipc_deadlock_demo`, `ipc_healthy_demo`, and `slog2_crash_demo` inside `qnx-target/bin/`.
+This produces `qnx_inspector`, `ipc_deadlock_demo`, `ipc_healthy_demo`, `ipc_benchmark_demo`, and `slog2_crash_demo` inside `qnx-target/bin/`.
 
 ### Step 3: Deploy to QNX 8.0 QEMU
 Deploy the cross-compiled binaries to the target VM over SSH/SCP:
@@ -198,7 +200,7 @@ python -m src.api_bridge
 ```
 http://localhost:8000
 ```
-You will see the live **QNX-Aegis Dashboard** showing microkernel uptime, channel topologies, thread blocking states, and the streaming `slog2` log console.
+You will see the live **QNX-Aegis ZOC + `btop` Workstation** with three session tabs (`1: btop-kernel-monitor`, `2: ipc-cytoscape-topology`, `3: mcp-jsonrpc-studio`) displaying Unicode Braille kernel telemetry, searchable `⁴proc (pidin)` threads synchronized with Cytoscape.js, Priority Inversion auditing, `ClockCycles()` IPC benchmarks, One-Click QCC AI Hot-Patching, and the streaming `slog2` log console.
 
 ---
 
@@ -237,17 +239,13 @@ Add the following snippet to your `claude_desktop_config.json`:
 
 ---
 
-## 7. Interactive Demonstration: Deadlock Detection & Fix
+## 7. Interactive Demonstrations & Workstation APIs
 
-1. **Trigger Deadlock:** Click **"Simulate Deadlock"** on the dashboard or invoke `qnx_deploy_and_execute` with `ipc_deadlock_demo`.
-2. **Observe Real-Time Visuals:** In Cytoscape.js, `Thread 1` and `Thread 2` shift from green (`RUNNING`) to red (`REPLY-blocked` / `SEND-blocked`) with glowing dashed edges indicating mutual wait.
-3. **Ask Your AI Agent:**
-   > *"Agent, inspect the QNX microkernel, diagnose why the application is frozen, and fix the source code."*
-4. **Agent Action:**
-   - Calls `qnx_detect_ipc_deadlock` and isolates the mutual `MsgSend` deadlock.
-   - Proposes asynchronous client-server decoupling with a dedicated worker thread or proper `MsgReceive` state order.
-   - Calls `qnx_compile_source` to build the patch.
-   - Calls `qnx_deploy_and_execute` to restore real-time execution.
+1. **Trigger Deadlock & Observe TUI Visuals:** Click **DEADLOCK** on the ZOC bookmark bar or invoke `qnx_deploy_and_execute` with `ipc_deadlock_demo`. Cytoscape nodes shift to deadlocked red edges while `³deadlock-detective` raises `[CRITICAL]` and `deadlock_detective.py` simultaneously audits any scheduling **Priority Inversions** (`priority_inversions` / `priority_inversion_count`).
+2. **One-Click QCC AI Hot-Patching (`POST /api/remediate/deadlock`):** Click **AI HOT-PATCH** in the bookmark bar or remediation card to automatically slay `ipc_deadlock_demo`, recompile `ipc_healthy_demo.c` cleanly with `qcc -Vgcc_ntox86_64`, deploy via SCP to the QNX 8.0 target, and restore healthy microkernel execution.
+3. **Hardware `ClockCycles()` IPC Benchmark (`POST /api/trigger/benchmark`):** Click **IPC BENCH** to execute 1,000 synchronous 64-byte `MsgSend()` / `MsgReceive()` / `MsgReply()` round-trips on QNX 8.0, reading `ClockCycles()` and `SYSPAGE_ENTRY(qtime)->cycles_per_sec` to compute sub-microsecond latency (`ns`) and throughput (`msg/s`).
+4. **Interactive MCP JSON-RPC Studio (`GET /api/mcp/tools`, `POST /api/mcp/call`):** Switch to Tab `3: mcp-jsonrpc-studio` to inspect live FastMCP tool schemas, compose JSON arguments, and execute MCP tools or REST endpoints directly in-browser with latency metrics.
+5. **Agentic Resolution Workflow:** Ask Claude Desktop / Cursor / Antigravity to call `qnx_detect_ipc_deadlock`, `qnx_compile_source`, and `qnx_deploy_and_execute` for autonomous end-to-end remediation.
 
 ---
 
