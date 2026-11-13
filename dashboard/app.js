@@ -22,6 +22,9 @@ const state = {
     rpcSeq: 1,
     isBootingQemu: false,
     detectiveInFlight: false,
+    detectivePromise: null,
+    justResolvedByHotpatch: false,
+    hotpatchResolutionSummary: '',
 };
 
 // Unicode Braille 2x4 vertical column bitmasks (left & right columns, levels 0..4)
@@ -101,6 +104,133 @@ function stateBadgeColor(rawState, isDeadlocked) {
 }
 
 /* ============================================================================
+ * Button Loading States, Live Action Feedback Bar & Panel Focus/Flash Helpers
+ * ========================================================================= */
+function setButtonBusy(btnId, busy, busyLabel = 'Working...') {
+    const btn = $(btnId);
+    if (!btn) return;
+    if (busy) {
+        if (!btn.dataset.origHtml) {
+            btn.dataset.origHtml = btn.innerHTML;
+        }
+        btn.disabled = true;
+        btn.classList.add('btn-active-action');
+        btn.innerHTML = `<span>⏳ ${escapeHtml(busyLabel)}</span>`;
+    } else {
+        if (btn.dataset.origHtml) {
+            btn.innerHTML = btn.dataset.origHtml;
+        }
+        btn.classList.remove('btn-active-action');
+        btn.disabled = false;
+    }
+}
+
+function setActionFeedback(level, message, quickActions = [], isHtml = false) {
+    const badge = $('feedback-badge');
+    const cmdEl = $('feedback-cmd');
+    const rightEl = $('feedback-right');
+
+    const map = {
+        idle: { cls: 'tag-idle', label: 'READY' },
+        running: { cls: 'tag-running', label: 'RUNNING' },
+        ok: { cls: 'tag-ok', label: 'DONE' },
+        warn: { cls: 'tag-warn', label: 'WARN' },
+        crit: { cls: 'tag-crit', label: 'CRITICAL' },
+    };
+    const spec = map[level] || map.idle;
+
+    if (badge) {
+        badge.className = `feedback-tag ${spec.cls}`;
+        badge.textContent = spec.label;
+    }
+    if (cmdEl) {
+        if (isHtml) {
+            cmdEl.innerHTML = message;
+        } else {
+            cmdEl.textContent = message;
+        }
+    }
+    if (rightEl) {
+        rightEl.innerHTML = '';
+        for (const act of quickActions) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'feedback-focus-btn';
+            btn.textContent = act.label;
+            btn.addEventListener('click', () => {
+                if (typeof act.onClick === 'function') {
+                    act.onClick();
+                } else if (act.panelId) {
+                    focusAndFlashPanel(act.panelId, Boolean(act.scrollSlog));
+                }
+            });
+            rightEl.appendChild(btn);
+        }
+    }
+}
+
+function focusAndFlashPanel(panelId, scrollSlogConsole = false) {
+    const btopWorkspace = $('btop-workspace');
+    if (btopWorkspace && btopWorkspace.classList.contains('hidden')) {
+        switchZocTab('btop');
+    }
+    const panel = $(panelId);
+    if (panel) {
+        panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        panel.classList.remove('panel-flash');
+        void panel.offsetWidth;
+        panel.classList.add('panel-flash');
+    }
+    if (scrollSlogConsole) {
+        const consoleEl = $('slog2-console');
+        if (consoleEl) consoleEl.scrollTop = consoleEl.scrollHeight;
+    }
+}
+
+function zoomToDeadlockedNodes() {
+    const btopWorkspace = $('btop-workspace');
+    if (btopWorkspace && btopWorkspace.classList.contains('hidden')) {
+        switchZocTab('btop');
+    }
+    focusAndFlashPanel('panel-ipc-topology');
+
+    const cy = state.cy;
+    if (!cy) return;
+
+    const deadlockedIds = new Set(
+        Array.isArray(state.latestDetective?.affected_threads)
+            ? state.latestDetective.affected_threads.map(String)
+            : []
+    );
+    const threads = state.latestTelemetry?.threads || [];
+    for (const t of threads) {
+        if (t.is_deadlocked) deadlockedIds.add(threadKey(t));
+    }
+
+    let collection = cy.collection();
+    for (const id of deadlockedIds) {
+        const ele = cy.getElementById(id);
+        if (ele && ele.length) collection = collection.union(ele);
+    }
+
+    if (collection.length > 0) {
+        cy.$(':selected').unselect();
+        collection.select();
+        const firstId = collection[0].id();
+        selectThreadByKey(firstId, false);
+        requestAnimationFrame(() => {
+            cy.resize();
+            cy.animate({ fit: { eles: collection, padding: 64 }, duration: 420 });
+        });
+    } else if (cy.nodes().length > 0) {
+        requestAnimationFrame(() => {
+            cy.resize();
+            cy.animate({ fit: { eles: cy.elements(), padding: 32 }, duration: 350 });
+        });
+    }
+}
+
+/* ============================================================================
  * Initialization & ZOC Clock / Session Tabs
  * ========================================================================= */
 document.addEventListener('DOMContentLoaded', () => {
@@ -134,9 +264,23 @@ function bindEventListeners() {
 
     $('btn-poll-slower')?.addEventListener('click', () => adjustPollInterval(500));
     $('btn-poll-faster')?.addEventListener('click', () => adjustPollInterval(-500));
-    $('btn-poll-refresh')?.addEventListener('click', () => {
-        fetchTelemetry();
-        runDetective(true);
+    $('btn-poll-refresh')?.addEventListener('click', async () => {
+        setButtonBusy('btn-poll-refresh', true, 'Syncing...');
+        setActionFeedback('running', 'Refreshing live telemetry from /dev/qnx_inspector and auditing kernel threads...');
+        try {
+            await fetchTelemetry();
+            const res = await runDetective(false);
+            const thr = state.latestTelemetry?.threads?.length || 0;
+            const cyc = res?.cycles?.length || 0;
+            setActionFeedback(
+                state.latestTelemetry?.connected ? 'ok' : 'warn',
+                state.latestTelemetry?.connected
+                    ? `Telemetry synced: ${thr} active threads (${cyc} deadlock cycles detected).`
+                    : 'Telemetry checked: QNX 8.0 QEMU VM is currently offline (127.0.0.1:2222 unreachable).'
+            );
+        } finally {
+            setButtonBusy('btn-poll-refresh', false);
+        }
     });
 
     $('btn-start-qemu')?.addEventListener('click', handleStartQemu);
@@ -145,8 +289,8 @@ function bindEventListeners() {
     $('btn-trigger-deadlock')?.addEventListener('click', () => triggerDemo('deadlock'));
     $('btn-trigger-healthy')?.addEventListener('click', () => triggerDemo('healthy'));
     $('btn-trigger-crash')?.addEventListener('click', () => triggerDemo('crash'));
-    $('btn-trigger-benchmark')?.addEventListener('click', triggerBenchmark);
-    $('btn-bench-inline')?.addEventListener('click', triggerBenchmark);
+    $('btn-trigger-benchmark')?.addEventListener('click', () => triggerBenchmark('btn-trigger-benchmark'));
+    $('btn-bench-inline')?.addEventListener('click', () => triggerBenchmark('btn-bench-inline'));
 
     $('btn-run-detective')?.addEventListener('click', () => runDetective(true));
     $('btn-ai-autofix')?.addEventListener('click', triggerAiAutofix);
@@ -159,6 +303,10 @@ function bindEventListeners() {
         } else if (state.cy) {
             state.cy.fit(undefined, 28);
         }
+        focusAndFlashPanel('panel-ipc-topology');
+        setActionFeedback('ok', 'Cytoscape IPC topology layout reset and fitted to panel.', [
+            { label: '🔍 Focus Graph', panelId: 'panel-ipc-topology' },
+        ]);
     });
 
     $('proc-filter-input')?.addEventListener('input', (e) => {
@@ -220,7 +368,7 @@ function adjustPollInterval(deltaMs) {
     state.pollIntervalMs = Math.max(500, Math.min(10000, state.pollIntervalMs + deltaMs));
     const label = $('poll-interval-label');
     if (label) {
-        label.textContent = `${(state.pollIntervalMs / 1000).toFixed(1)}s`;
+        label.textContent = `${state.pollIntervalMs}ms`;
     }
     restartPollTimer();
 }
@@ -297,16 +445,25 @@ function applyTelemetry(data) {
     renderKernelCpuPanel(connected, sys, threads);
     renderProcTable(threads, connected);
     renderSlog2Console(data.slog2_tail, connected);
-    updateTopologyGraph(data, state.latestDetective, false);
 
     if (!connected) {
         state.latestDetective = null;
         state.lastDetectiveSig = null;
+        updateTopologyGraph(data, null, false);
         renderDetectiveOffline();
         return;
     }
 
-    // Trigger background Detective audit when thread blocking pattern changes or initial connect
+    if (data.deadlock_analysis && typeof data.deadlock_analysis === 'object') {
+        state.latestDetective = data.deadlock_analysis;
+        renderDetectiveResult(data.deadlock_analysis);
+        updateTopologyGraph(data, state.latestDetective, false);
+        return;
+    }
+
+    updateTopologyGraph(data, state.latestDetective, false);
+
+    // Fallback background Detective audit when thread blocking pattern changes
     const sig = threads
         .filter((t) => t.target_pid || t.is_deadlocked)
         .map((t) => `${t.pid}:${t.tid}->${t.target_pid || 0}:${t.state}:${t.priority}:${t.is_deadlocked ? 1 : 0}`)
@@ -323,19 +480,26 @@ function updateConnectionChrome(connected, sys) {
     const connBadge = $('connection-badge');
     const connText = $('connection-status-text');
     const targetBadge = $('target-badge');
+    const targetBadgeText = $('target-badge-text');
+    const targetDot = $('target-dot');
     const overlay = $('cy-offline-overlay');
 
     if (connBadge) {
-        connBadge.style.borderColor = connected ? '#a3be8c' : '#bf616a';
-        connBadge.style.color = connected ? '#a3be8c' : '#bf616a';
+        connBadge.className = `zoc-pill ${connected ? 'zoc-pill-green' : 'zoc-pill-red'}`;
     }
     if (connText) {
-        connText.textContent = connected ? 'ONLINE (QNX 8.0)' : 'OFFLINE';
+        connText.textContent = connected ? 'QEMU SSH: ONLINE' : 'QEMU SSH: OFFLINE';
     }
+    const arch = sys.architecture || 'x86_64';
+    const host = sys.hostname || 'disconnected';
     if (targetBadge) {
-        const arch = sys.architecture || 'x86_64';
-        const host = sys.hostname || 'disconnected';
-        targetBadge.textContent = connected ? `QNX 8.0 ${arch} :: ${host}` : `QNX 8.0 ${arch} :: OFFLINE`;
+        targetBadge.className = `zoc-pill ${connected ? 'zoc-pill-green' : 'zoc-pill-muted'}`;
+    }
+    if (targetDot) {
+        targetDot.className = `zoc-dot ${connected ? 'bg-emerald-400' : 'bg-slate-500'}`;
+    }
+    if (targetBadgeText) {
+        targetBadgeText.textContent = connected ? `Target: QNX 8.0 ${arch} (${host})` : `Target: ${arch} OFFLINE`;
     }
     if (overlay) {
         overlay.classList.toggle('hidden', connected);
@@ -346,8 +510,8 @@ function updateConnectionChrome(connected, sys) {
     const qemuText = $('btn-start-qemu-text');
     if (qemuBtn && !state.isBootingQemu) {
         qemuBtn.disabled = connected;
-        if (qemuIcon) qemuIcon.textContent = connected ? '●' : '▶';
-        if (qemuText) qemuText.textContent = connected ? 'VM ONLINE' : 'START QEMU';
+        if (qemuIcon) qemuIcon.textContent = connected ? '✅' : '🚀';
+        if (qemuText) qemuText.textContent = connected ? 'QNX 8.0 VM Online' : 'Boot QNX 8.0 VM';
     }
 
     // Bottom ZOC session footer
@@ -355,15 +519,15 @@ function updateConnectionChrome(connected, sys) {
     const devEl = $('zoc-status-dev');
     const upEl = $('zoc-status-uptime');
     if (sshEl) {
-        sshEl.textContent = connected ? 'SSH: 127.0.0.1:2222 [UP]' : 'SSH: 127.0.0.1:2222 [OFFLINE]';
+        sshEl.textContent = connected ? '🟩 Secure Shell (127.0.0.1:2222)' : '🟥 SSH Offline (127.0.0.1:2222)';
         sshEl.style.color = connected ? '#a3be8c' : '#bf616a';
     }
     if (devEl) {
-        devEl.textContent = connected ? '/dev/qnx_inspector: MOUNTED' : '/dev/qnx_inspector: CLOSED';
+        devEl.textContent = connected ? '🟩 /dev/qnx_inspector (MOUNTED)' : '⬜ /dev/qnx_inspector (CLOSED)';
         devEl.style.color = connected ? '#88c0d0' : '#81a1c1';
     }
     if (upEl) {
-        upEl.textContent = connected ? `UP: ${formatUptime(sys.uptime_sec)}` : 'UP: --:--:--';
+        upEl.textContent = connected ? `Uptime: ${formatUptime(sys.uptime_sec)}` : 'Uptime: --:--:--';
     }
 }
 
@@ -798,49 +962,131 @@ function renderDetectiveOffline() {
     const piList = $('pi-auditor-list');
     const aiBox = $('ai-remediation-box');
 
+    state.justResolvedByHotpatch = false;
+    state.hotpatchResolutionSummary = '';
+
     if (badge) {
-        badge.style.borderColor = '#4c566a';
-        badge.style.color = '#81a1c1';
+        badge.className = 'zoc-pill zoc-pill-muted';
     }
-    if (dot) dot.style.backgroundColor = '#81a1c1';
-    if (txt) txt.textContent = 'DETECTION: OFFLINE';
+    if (dot) dot.className = 'zoc-dot bg-slate-500';
+    if (txt) txt.textContent = 'IPC: Offline';
     if (panel) panel.classList.remove('panel-alert');
     if (icon) icon.textContent = '🛡';
-    if (tag) tag.textContent = '[STANDBY]';
-    if (details) details.textContent = 'Connect QNX 8.0 target to audit MsgSend cycles & priority inversions.';
+    if (tag) tag.textContent = 'STATUS: OFFLINE';
+    if (details) {
+        details.innerHTML = '<p class="text-slate-400">Connect QNX 8.0 target to audit MsgSend cycles &amp; priority inversions.</p>';
+    }
     if (piBadge) {
-        piBadge.className = 'pi-clean';
+        piBadge.className = 'pi-badge pi-clean';
         piBadge.textContent = 'PI: 0';
     }
-    if (piList) piList.innerHTML = '';
+    if (piList) {
+        piList.innerHTML = '';
+        piList.classList.add('hidden');
+    }
     if (aiBox) aiBox.classList.add('hidden');
 }
 
+function formatCycleChain(cycle) {
+    const threads = state.latestTelemetry?.threads || [];
+    const nameMap = new Map();
+    for (const t of threads) {
+        const shortName = String(t.name || 'proc').split('/').pop();
+        nameMap.set(threadKey(t), shortName);
+    }
+
+    let nodes = Array.isArray(cycle.cycle_nodes) && cycle.cycle_nodes.length
+        ? cycle.cycle_nodes
+        : String(cycle.cycle_path || '').split(/\s*->\s*/).filter(Boolean);
+
+    if (!nodes.length && cycle.cycle_path) return escapeHtml(cycle.cycle_path);
+
+    return nodes
+        .map((id) => {
+            const key = String(id).trim();
+            const procName = nameMap.get(key);
+            const display = procName ? `${procName} (${key})` : key;
+            return `<span class="text-rose-200">${escapeHtml(display)}</span>`;
+        })
+        .join(' <span class="text-amber-300 font-normal">──[MsgSend WAIT]──►</span> ');
+}
+
 async function runDetective(manual = false) {
-    if (state.detectiveInFlight) return;
+    if (state.detectivePromise) {
+        if (!manual) return await state.detectivePromise;
+        try { await state.detectivePromise; } catch (_) {}
+    }
     if (!state.latestTelemetry || !state.latestTelemetry.connected) {
-        if (manual) renderDetectiveOffline();
-        return;
+        if (manual) {
+            renderDetectiveOffline();
+            setActionFeedback(
+                'warn',
+                'Cannot run Deadlock & Priority Inversion audit while QNX 8.0 QEMU VM is offline (127.0.0.1:2222 closed).'
+            );
+        }
+        return null;
     }
 
     state.detectiveInFlight = true;
     const tag = $('deadlock-panel-tag');
-    if (manual && tag) tag.textContent = '[SCANNING]';
-
-    try {
-        const resp = await fetch('/api/detective', { method: 'POST' });
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        const res = await resp.json();
-        state.latestDetective = res;
-        renderDetectiveResult(res);
-        updateTopologyGraph(state.latestTelemetry, res, false);
-    } catch (err) {
-        if (tag) tag.textContent = '[ERR]';
-        const details = $('deadlock-details');
-        if (details) details.textContent = `Detective audit error: ${err.message}`;
-    } finally {
-        state.detectiveInFlight = false;
+    if (manual) {
+        setButtonBusy('btn-run-detective', true, 'Auditing...');
+        if (tag) tag.textContent = 'STATUS: SCANNING...';
+        setActionFeedback(
+            'running',
+            'Auditing /dev/qnx_inspector threads via Tarjan cycle detection & Priority Inversion scanner...'
+        );
     }
+
+    const work = (async () => {
+        try {
+            const resp = await fetch('/api/detective', { method: 'POST' });
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const res = await resp.json();
+            state.latestDetective = res;
+            renderDetectiveResult(res);
+            updateTopologyGraph(state.latestTelemetry, res, false);
+
+            if (manual) {
+                const threadCnt = state.latestTelemetry?.threads?.length || 0;
+                const procCnt = state.latestTelemetry?.system?.num_processes || 0;
+                const cycCnt = Array.isArray(res.cycles) ? res.cycles.length : (res.deadlock_detected ? 1 : 0);
+                const piCnt = Number(res.priority_inversion_count ?? (res.priority_inversions?.length || 0)) || 0;
+                const level = cycCnt > 0 ? 'crit' : piCnt > 0 ? 'warn' : 'ok';
+
+                const quickBtns = [{ label: '📊 View Cycles', panelId: 'deadlock-panel' }];
+                if (cycCnt > 0) {
+                    quickBtns.unshift({ label: '🎯 Focus Graph', onClick: zoomToDeadlockedNodes });
+                    zoomToDeadlockedNodes();
+                } else {
+                    quickBtns.push({ label: '🔍 Focus Graph', panelId: 'panel-ipc-topology' });
+                }
+                focusAndFlashPanel('deadlock-panel');
+                setActionFeedback(
+                    level,
+                    `Scanned ${threadCnt} kernel threads across ${procCnt} processes ➔ Found ${cycCnt} deadlock cycle(s), ${piCnt} priority inversion(s).`,
+                    quickBtns
+                );
+            }
+
+            return res;
+        } catch (err) {
+            if (tag) tag.textContent = 'STATUS: ERROR';
+            const details = $('deadlock-details');
+            if (details) details.textContent = `Detective audit error: ${err.message}`;
+            if (manual) {
+                setActionFeedback('crit', `Deadlock audit failed: ${err.message}`);
+            }
+            return null;
+        } finally {
+            state.detectiveInFlight = false;
+            state.detectivePromise = null;
+            if (manual) setButtonBusy('btn-run-detective', false);
+        }
+    })();
+
+    state.detectivePromise = work;
+    return await work;
 }
 
 function renderDetectiveResult(res) {
@@ -857,54 +1103,89 @@ function renderDetectiveResult(res) {
     const piBadge = $('pi-count-badge');
     const piList = $('pi-auditor-list');
 
-    const hasDeadlock = Boolean(res.deadlock_detected || (Array.isArray(res.cycles) && res.cycles.length > 0));
+    const cycles = Array.isArray(res.cycles) ? res.cycles : [];
+    const hasDeadlock = Boolean(res.deadlock_detected || cycles.length > 0);
     const inversions = Array.isArray(res.priority_inversions) ? res.priority_inversions : [];
     const piCount = Number(res.priority_inversion_count ?? inversions.length) || 0;
 
+    if (hasDeadlock) {
+        state.justResolvedByHotpatch = false;
+    }
+
     if (badge) {
-        badge.style.borderColor = hasDeadlock ? '#bf616a' : (piCount > 0 ? '#ebcb8b' : '#a3be8c');
-        badge.style.color = hasDeadlock ? '#bf616a' : (piCount > 0 ? '#ebcb8b' : '#a3be8c');
+        badge.className = `zoc-pill ${hasDeadlock ? 'zoc-pill-red pulse-red' : piCount > 0 ? 'zoc-pill-amber' : 'zoc-pill-green'}`;
     }
     if (dot) {
-        dot.style.backgroundColor = hasDeadlock ? '#bf616a' : (piCount > 0 ? '#ebcb8b' : '#a3be8c');
+        dot.className = `zoc-dot ${hasDeadlock ? 'bg-rose-400 animate-pulse' : piCount > 0 ? 'bg-amber-400' : 'bg-emerald-400'}`;
     }
     if (txt) {
         txt.textContent = hasDeadlock
-            ? `DEADLOCK (${(res.cycles || []).length} CYCLE)`
+            ? `IPC: DEADLOCK (${cycles.length} CYCLE)`
             : piCount > 0
-            ? `PRIO INVERSION (${piCount})`
-            : 'IPC GRAPH HEALTHY';
+            ? `IPC: PRIO INVERSION (${piCount})`
+            : 'IPC: Nominal';
     }
 
     if (panel) panel.classList.toggle('panel-alert', hasDeadlock);
-    if (icon) icon.textContent = hasDeadlock ? '🚨' : (piCount > 0 ? '⚠' : '🛡');
-    if (tag) tag.textContent = hasDeadlock ? '[CRITICAL]' : (piCount > 0 ? '[WARN]' : '[OK]');
+    if (icon) icon.textContent = hasDeadlock ? '🚨' : piCount > 0 ? '⚠️' : '🛡';
+    if (tag) tag.textContent = hasDeadlock ? 'STATUS: CRITICAL' : piCount > 0 ? 'STATUS: WARN' : 'STATUS: CLEAN';
 
     if (details) {
-        const msg = res.diagnosis || res.summary || (hasDeadlock ? 'Circular MsgSend Wait-For Cycle Detected!' : 'No circular MsgSend wait-for cycles detected.');
-        details.textContent = msg;
+        if (hasDeadlock && cycles.length > 0) {
+            const summaryLine = res.summary || `Detected ${cycles.length} circular IPC deadlock(s) involving ${(res.affected_threads || []).length} threads.`;
+            const cyclesHtml = cycles
+                .map((c, idx) => {
+                    const chain = formatCycleChain(c);
+                    const desc = c.description ? `<div class="cycle-desc">${escapeHtml(c.description)}</div>` : '';
+                    return `<div class="cycle-card">
+                        <div class="text-[10px] font-bold text-rose-400 mb-0.5">CYCLE #${idx + 1}:</div>
+                        <div class="cycle-chain">${chain}</div>
+                        ${desc}
+                    </div>`;
+                })
+                .join('');
+
+            details.innerHTML = `
+                <div class="font-bold text-rose-300">${escapeHtml(summaryLine)}</div>
+                ${cyclesHtml}
+                <div class="pt-1">
+                    <button id="btn-zoom-deadlock-cycle" type="button" class="zoc-btn zoc-btn-red btn-xs">🎯 Zoom to Deadlocked Threads on Graph</button>
+                </div>
+            `;
+            $('btn-zoom-deadlock-cycle')?.addEventListener('click', zoomToDeadlockedNodes);
+        } else if (!hasDeadlock && state.justResolvedByHotpatch) {
+            details.innerHTML = `
+                <div class="resolved-banner">
+                    ✔ RESOLVED BY AI HOT-PATCH — ${escapeHtml(state.hotpatchResolutionSummary || 'Circular deadlock cleared; healthy non-blocking IPC verified (0 cycles).')}
+                </div>
+            `;
+        } else {
+            const msg = res.diagnosis || res.summary || 'No circular MsgSend wait-for cycles detected in QNX message-passing pipeline.';
+            details.innerHTML = `<p class="text-slate-300">${escapeHtml(msg)}</p>`;
+        }
     }
 
     if (piBadge) {
-        piBadge.className = piCount > 0 ? 'pi-warn' : 'pi-clean';
+        piBadge.className = `pi-badge ${piCount > 0 ? 'pi-warn' : 'pi-clean'}`;
         piBadge.textContent = `PI: ${piCount}`;
     }
 
     if (piList) {
+        piList.classList.toggle('hidden', inversions.length === 0);
         if (!inversions.length) {
             piList.innerHTML = '';
         } else {
             piList.innerHTML = inversions
                 .map((pi) => {
                     if (typeof pi === 'string') {
-                        return `<div style="color:#ebcb8b;font-size:11px;margin-top:4px;">▸ ${escapeHtml(pi)}</div>`;
+                        return `<div class="pi-item">▸ ${escapeHtml(pi)}</div>`;
                     }
                     const highName = pi.client_name || pi.blocked_name || pi.client || 'client';
                     const lowName = pi.server_name || pi.blocker_name || pi.server || 'server';
                     const highPrio = pi.client_priority ?? pi.blocked_priority ?? '?';
                     const lowPrio = pi.server_priority ?? pi.blocker_priority ?? '?';
                     const reason = pi.description || `${highName} (prio ${highPrio}) blocked on ${lowName} (prio ${lowPrio})`;
-                    return `<div style="color:#ebcb8b;font-size:11px;margin-top:4px;">▸ [PRIO INV] ${escapeHtml(reason)}</div>`;
+                    return `<div class="pi-item">▸ [PRIO INV] ${escapeHtml(reason)}</div>`;
                 })
                 .join('');
         }
@@ -912,11 +1193,11 @@ function renderDetectiveResult(res) {
 
     if (aiBox && aiText) {
         const advice = res.remediation_advice || res.remediation;
-        if (hasDeadlock || piCount > 0 || advice) {
+        if (hasDeadlock || piCount > 0) {
             aiBox.classList.remove('hidden');
             aiText.textContent =
                 advice ||
-                'Circular blocking detected between synchronous MsgSend() threads. Click [AI HOT-PATCH] to slay deadlocked binary, compile asymmetric non-blocking ipc_healthy_demo via QCC, and deploy to target.';
+                'Circular blocking detected between synchronous MsgSend() threads. Click [AI Hot-Patch (QCC)] to slay deadlocked binary, compile asymmetric non-blocking ipc_healthy_demo via QCC, and deploy to target.';
         } else {
             aiBox.classList.add('hidden');
         }
@@ -924,14 +1205,21 @@ function renderDetectiveResult(res) {
 }
 
 async function triggerAiAutofix() {
-    const btnBar = $('btn-ai-autofix');
-    const btnInline = $('btn-ai-autofix-inline');
+    if (!state.latestTelemetry || !state.latestTelemetry.connected) {
+        setActionFeedback('warn', 'Cannot execute QCC AI Hot-Patch while QNX 8.0 target is offline.');
+        return;
+    }
+
     const outEl = $('hotpatch-output');
     const aiBox = $('ai-remediation-box');
 
-    if (aiBox) aiBox.classList.remove('hidden');
-    if (btnBar) btnBar.disabled = true;
-    if (btnInline) btnInline.disabled = true;
+    setButtonBusy('btn-ai-autofix', true, 'Hot-Patching...');
+    setButtonBusy('btn-ai-autofix-inline', true, 'QCC Patching...');
+    setActionFeedback(
+        'running',
+        'Slaying deadlocked process ➔ cross-compiling ipc_healthy_demo.c with qcc -Vgcc_ntox86_64 ➔ SCP deploying to target...'
+    );
+
     if (outEl) {
         outEl.classList.remove('hidden');
         outEl.textContent = '[QCC HOT-PATCH] Terminating deadlock -> qcc -Vgcc_ntox86_64 compile -> SCP deploy -> executing ipc_healthy_demo...';
@@ -941,7 +1229,7 @@ async function triggerAiAutofix() {
         const resp = await fetch('/api/remediate/deadlock', { method: 'POST' });
         const data = await resp.json();
         if (!resp.ok) {
-            throw new Error(data.detail || `HTTP ${resp.status}`);
+            throw new Error(data.detail || data.error || `HTTP ${resp.status}`);
         }
         const summary = [
             `[QCC] ${data.qcc_command || 'qcc -Vgcc_ntox86_64'} -> exit ${data.qcc_exit_code}`,
@@ -949,50 +1237,105 @@ async function triggerAiAutofix() {
             `[SCP] ${data.upload_message || data.target_deployed || 'deployed'}`,
             data.execution_stdout ? `[EXEC]\n${data.execution_stdout.trim()}` : `[STATUS] ${data.message || 'Done'}`,
         ].join('\n');
-        if (outEl) outEl.textContent = summary;
+        if (outEl) {
+            outEl.classList.remove('hidden');
+            outEl.textContent = summary;
+        }
 
         await fetchTelemetry();
-        await runDetective(true);
+        const postRes = await runDetective(false);
+        const postHasCycles = Boolean(
+            postRes && (postRes.deadlock_detected || (Array.isArray(postRes.cycles) && postRes.cycles.length > 0))
+        );
+
+        if (!postHasCycles) {
+            state.justResolvedByHotpatch = true;
+            state.hotpatchResolutionSummary = `Slayed ipc_deadlock_demo, built ipc_healthy_demo (qcc exit ${data.qcc_exit_code}), deployed via SCP — 0 deadlock cycles remaining.`;
+            if (aiBox) aiBox.classList.add('hidden');
+            if (postRes) renderDetectiveResult(postRes);
+            focusAndFlashPanel('deadlock-panel');
+            setActionFeedback(
+                'ok',
+                `✔ RESOLVED BY AI HOT-PATCH — qcc built & deployed ipc_healthy_demo (0 circular waits remaining).`,
+                [
+                    { label: '📊 View Resolution', panelId: 'deadlock-panel' },
+                    { label: '🔍 Focus Graph', panelId: 'panel-ipc-topology' },
+                ]
+            );
+        } else {
+            focusAndFlashPanel('deadlock-panel');
+            setActionFeedback(
+                'warn',
+                `Hot-patch deployed, but ${(postRes.cycles || []).length} cycle(s) still remain on target.`,
+                [{ label: '📊 View Cycles', panelId: 'deadlock-panel' }]
+            );
+        }
     } catch (err) {
-        if (outEl) outEl.textContent = `[HOT-PATCH ERROR] ${err.message}`;
+        if (outEl) {
+            outEl.classList.remove('hidden');
+            outEl.textContent = `[HOT-PATCH ERROR] ${err.message}`;
+        }
+        setActionFeedback('crit', `AI Hot-Patch failed: ${err.message}`, [
+            { label: '📊 View Panel', panelId: 'deadlock-panel' },
+        ]);
     } finally {
-        if (btnBar) btnBar.disabled = false;
-        if (btnInline) btnInline.disabled = false;
+        setButtonBusy('btn-ai-autofix', false);
+        setButtonBusy('btn-ai-autofix-inline', false);
     }
 }
 
-async function triggerBenchmark() {
-    const statusEl = $('bench-status');
-    const btnMain = $('btn-trigger-benchmark');
-    const btnInline = $('btn-bench-inline');
+async function triggerBenchmark(clickedBtnId = 'btn-trigger-benchmark') {
+    if (!state.latestTelemetry || !state.latestTelemetry.connected) {
+        setActionFeedback('warn', 'Cannot execute ClockCycles() IPC benchmark while QNX 8.0 target is offline.');
+        return;
+    }
 
-    if (btnMain) btnMain.disabled = true;
-    if (btnInline) btnInline.disabled = true;
+    const statusEl = $('bench-status');
+    setButtonBusy('btn-trigger-benchmark', true, 'Benchmarking...');
+    setButtonBusy('btn-bench-inline', true, 'RUN...');
+    setActionFeedback(
+        'running',
+        'Executing 1,000x 64B MsgSend/MsgReceive/MsgReply round-trips on QNX 8.0 using CPU ClockCycles()...'
+    );
     if (statusEl) statusEl.textContent = 'Running 1,000x 64B MsgSend() ClockCycles() round-trips on QNX target...';
 
     try {
         const resp = await fetch('/api/trigger/benchmark', { method: 'POST' });
         const data = await resp.json();
         if (!resp.ok) {
-            throw new Error(data.detail || `HTTP ${resp.status}`);
+            throw new Error(data.detail || data.error || `HTTP ${resp.status}`);
         }
 
         const m = data.metrics || data;
-        if ($('bench-latency-ns')) $('bench-latency-ns').textContent = `${Number(m.avg_latency_ns || 0).toFixed(1)} ns`;
-        if ($('bench-throughput')) $('bench-throughput').textContent = `${Math.round(Number(m.throughput_msg_sec || 0)).toLocaleString()} msg/s`;
+        const avgNs = Number(m.avg_latency_ns || 0).toFixed(1);
+        const msgSec = Math.round(Number(m.throughput_msg_sec || 0)).toLocaleString();
+        const hzTxt = formatFreq(m.cycles_per_sec);
+
+        if ($('bench-latency-ns')) $('bench-latency-ns').textContent = `${avgNs} ns`;
+        if ($('bench-throughput')) $('bench-throughput').textContent = `${msgSec} msg/s`;
         if ($('bench-payload')) $('bench-payload').textContent = `${m.payload_bytes || 64} B`;
-        if ($('bench-cps')) $('bench-cps').textContent = formatFreq(m.cycles_per_sec);
+        if ($('bench-cps')) $('bench-cps').textContent = hzTxt;
         if ($('bench-min-cyc')) $('bench-min-cyc').textContent = Number(m.min_cycles || 0).toLocaleString();
         if ($('bench-avg-cyc')) $('bench-avg-cyc').textContent = Math.round(Number(m.avg_cycles || 0)).toLocaleString();
         if ($('bench-max-cyc')) $('bench-max-cyc').textContent = Number(m.max_cycles || 0).toLocaleString();
         if (statusEl) statusEl.textContent = `[PASS] Completed ${m.iterations || 1000} iterations directly on QNX 8.0 hardware clock.`;
 
         await fetchTelemetry();
+        focusAndFlashPanel('deadlock-panel');
+        setActionFeedback(
+            'ok',
+            `ClockCycles() IPC Benchmark [PASS]: ${avgNs} ns avg RTT (${msgSec} msg/s @ ${hzTxt}, 1,000x 64B MsgSend).`,
+            [
+                { label: '⏱ View Bench', panelId: 'deadlock-panel' },
+                { label: '📜 View Slog2', panelId: 'panel-slog2', scrollSlog: true },
+            ]
+        );
     } catch (err) {
         if (statusEl) statusEl.textContent = `[BENCH ERROR] ${err.message}`;
+        setActionFeedback('crit', `Benchmark failed: ${err.message}`);
     } finally {
-        if (btnMain) btnMain.disabled = false;
-        if (btnInline) btnInline.disabled = false;
+        setButtonBusy('btn-trigger-benchmark', false);
+        setButtonBusy('btn-bench-inline', false);
     }
 }
 
@@ -1000,29 +1343,30 @@ async function triggerBenchmark() {
  * QEMU Start & Target Demo Triggers
  * ========================================================================= */
 async function handleStartQemu() {
-    const btn = $('btn-start-qemu');
     const overlayBtn = $('btn-start-qemu-overlay');
-    const txt = $('btn-start-qemu-text');
-    const icon = $('btn-start-qemu-icon');
 
     state.isBootingQemu = true;
-    if (btn) btn.disabled = true;
+    setButtonBusy('btn-start-qemu', true, 'Booting VM...');
     if (overlayBtn) overlayBtn.disabled = true;
-    if (icon) icon.textContent = '⏳';
-    if (txt) txt.textContent = 'BOOTING...';
+    setActionFeedback('running', 'Booting QNX Neutrino RTOS 8.0 in QEMU & waiting for SSH 127.0.0.1:2222...');
 
     try {
         const resp = await fetch('/api/qemu/start', { method: 'POST' });
         const data = await resp.json();
-        if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
+        if (!resp.ok) throw new Error(data.detail || data.error || `HTTP ${resp.status}`);
         await fetchTelemetry();
+        setActionFeedback('ok', data.message || 'QNX 8.0 QEMU VM online and provisioned (/dev/qnx_inspector mounted).', [
+            { label: '🔍 Focus Graph', panelId: 'panel-ipc-topology' },
+        ]);
     } catch (err) {
         const consoleEl = $('slog2-console');
         if (consoleEl) {
             consoleEl.innerHTML += `<div style="color:#bf616a;">[QEMU START ERROR] ${escapeHtml(err.message)}</div>`;
         }
+        setActionFeedback('crit', `Failed to boot QNX 8.0 QEMU VM: ${err.message}`);
     } finally {
         state.isBootingQemu = false;
+        setButtonBusy('btn-start-qemu', false);
         if (overlayBtn) overlayBtn.disabled = false;
         if (state.latestTelemetry) {
             updateConnectionChrome(Boolean(state.latestTelemetry.connected), state.latestTelemetry.system || {});
@@ -1031,17 +1375,104 @@ async function handleStartQemu() {
 }
 
 async function triggerDemo(mode) {
+    // Always clear stale hot-patch logs and prior resolution banner whenever starting a new demo
+    const hotpatchEl = $('hotpatch-output');
+    if (hotpatchEl) {
+        hotpatchEl.classList.add('hidden');
+        hotpatchEl.textContent = '';
+    }
+    state.justResolvedByHotpatch = false;
+    state.hotpatchResolutionSummary = '';
+
+    const configMap = {
+        deadlock: {
+            btnId: 'btn-trigger-deadlock',
+            busy: 'Injecting Deadlock...',
+            runMsg: 'Slaying prior demo processes & spawning mutual MsgSend() circular wait threads on QNX 8.0...',
+        },
+        crash: {
+            btnId: 'btn-trigger-crash',
+            busy: 'Injecting Fault...',
+            runMsg: 'Executing slog2_crash_demo on QNX 8.0 & capturing critical slog2 buffer entries...',
+        },
+        healthy: {
+            btnId: 'btn-trigger-healthy',
+            busy: 'Starting Healthy...',
+            runMsg: 'Stopping fault demos via sudo slay & launching non-blocking ipc_healthy_demo loop...',
+        },
+    };
+    const cfg = configMap[mode] || { btnId: null, busy: 'Running...', runMsg: `Dispatching ${mode}...` };
+
+    if (!state.latestTelemetry || !state.latestTelemetry.connected) {
+        setActionFeedback('warn', `Cannot run ${mode} demo while QNX 8.0 QEMU target is offline.`);
+        return;
+    }
+
+    if (cfg.btnId) setButtonBusy(cfg.btnId, true, cfg.busy);
+    setActionFeedback('running', cfg.runMsg);
+
     try {
         const resp = await fetch(`/api/trigger/${mode}`, { method: 'POST' });
         const data = await resp.json();
-        if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
+        if (!resp.ok) throw new Error(data.detail || data.error || `HTTP ${resp.status}`);
+
         await fetchTelemetry();
-        await runDetective(true);
+        const detRes = mode === 'crash' ? null : await runDetective(false);
+
+        if (mode === 'deadlock') {
+            const cycCnt = detRes?.cycles?.length || 0;
+            const thrCnt = detRes?.affected_threads?.length || 0;
+            focusAndFlashPanel('deadlock-panel');
+            if (cycCnt > 0) zoomToDeadlockedNodes();
+            setActionFeedback(
+                cycCnt > 0 ? 'crit' : 'warn',
+                cycCnt > 0
+                    ? `Injected IPC Deadlock: ${cycCnt} circular MsgSend cycle(s) detected across ${thrCnt} blocked thread(s).`
+                    : `${data.message || 'Dispatched ipc_deadlock_demo'} — awaiting next telemetry frame.`,
+                [
+                    { label: '🎯 Focus Graph', onClick: zoomToDeadlockedNodes },
+                    { label: '📊 View Cycles', panelId: 'deadlock-panel' },
+                ]
+            );
+        } else if (mode === 'crash') {
+            const previewLines = String(data.slog2_preview || '')
+                .split(/\r?\n/)
+                .map((l) => l.trim())
+                .filter(Boolean);
+            const critLine =
+                [...previewLines].reverse().find((l) => /CRIT|FAULT|SIGSEGV|ERROR|AEGIS/i.test(l)) ||
+                previewLines[previewLines.length - 1] ||
+                'slog2_crash_demo emitted buffer fault into /dev/slog2';
+
+            focusAndFlashPanel('panel-slog2', true);
+            setActionFeedback(
+                'warn',
+                `Slog2 Fault Injected ➔ <span class="text-rose-300 font-bold">${escapeHtml(critLine)}</span>`,
+                [
+                    { label: '📜 View Slog2', panelId: 'panel-slog2', scrollSlog: true },
+                    { label: '📋 View Proc', panelId: 'panel-proc-table' },
+                ],
+                true
+            );
+        } else {
+            focusAndFlashPanel('deadlock-panel');
+            setActionFeedback(
+                'ok',
+                data.message || 'Healthy IPC running — ipc_healthy_demo active with 0 deadlock cycles.',
+                [
+                    { label: '🔍 Focus Graph', panelId: 'panel-ipc-topology' },
+                    { label: '📋 View Proc', panelId: 'panel-proc-table' },
+                ]
+            );
+        }
     } catch (err) {
         const consoleEl = $('slog2-console');
         if (consoleEl) {
             consoleEl.innerHTML += `<div style="color:#bf616a;">[TRIGGER ${escapeHtml(mode.toUpperCase())} ERROR] ${escapeHtml(err.message)}</div>`;
         }
+        setActionFeedback('crit', `Failed triggering ${mode}: ${err.message}`);
+    } finally {
+        if (cfg.btnId) setButtonBusy(cfg.btnId, false);
     }
 }
 

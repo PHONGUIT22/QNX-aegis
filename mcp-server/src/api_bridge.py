@@ -221,21 +221,28 @@ async def run_detective():
 
 @app.post("/api/trigger/deadlock")
 async def trigger_deadlock_demo():
-    """Triggers the circular MsgSend deadlock demo on the target."""
+    """Slays any active fault/healthy demos cleanly, then triggers the circular MsgSend deadlock demo."""
     if not bridge.is_port_open():
         return JSONResponse(
             status_code=503,
             content={"success": False, "error": "QNX target is offline. Please start QEMU VM first."}
         )
+    kill_cmd = (
+        f"echo {settings.qemu_ssh_password} | sudo -S slay -f ipc_deadlock_demo ipc_healthy_demo 2>/dev/null || "
+        f"slay -f ipc_deadlock_demo ipc_healthy_demo 2>/dev/null"
+    )
+    await asyncio.to_thread(bridge.execute_remote, kill_cmd, 5)
+
     remote_bin = f"{settings.qemu_deploy_dir}/ipc_deadlock_demo"
     code, out, err = await asyncio.to_thread(
         bridge.execute_remote,
         f"nohup {remote_bin} >/dev/null 2>&1 </dev/null &",
         5
     )
+    await asyncio.sleep(0.4)
     return {
         "success": True,
-        "message": "Dispatched ipc_deadlock_demo to QNX target (detached stdio)",
+        "message": "Slayed prior demo instances and launched ipc_deadlock_demo (threads blocking in circular MsgSend wait)",
         "stdout": out,
         "stderr": err
     }
@@ -243,22 +250,28 @@ async def trigger_deadlock_demo():
 
 @app.post("/api/trigger/healthy")
 async def trigger_healthy_demo():
-    """Terminates existing demos and runs the healthy IPC transaction loop."""
+    """Terminates existing demos with sudo and runs the healthy IPC transaction loop."""
     if not bridge.is_port_open():
         return JSONResponse(
             status_code=503,
             content={"success": False, "error": "QNX target is offline. Please start QEMU VM first."}
         )
-    await asyncio.to_thread(bridge.execute_remote, "slay -f ipc_deadlock_demo 2>/dev/null", 5)
+    kill_cmd = (
+        f"echo {settings.qemu_ssh_password} | sudo -S slay -f ipc_deadlock_demo ipc_healthy_demo 2>/dev/null || "
+        f"slay -f ipc_deadlock_demo ipc_healthy_demo 2>/dev/null"
+    )
+    await asyncio.to_thread(bridge.execute_remote, kill_cmd, 5)
+
     remote_bin = f"{settings.qemu_deploy_dir}/ipc_healthy_demo"
     code, out, err = await asyncio.to_thread(
         bridge.execute_remote,
         f"nohup {remote_bin} >/dev/null 2>&1 </dev/null &",
         5
     )
+    await asyncio.sleep(0.3)
     return {
         "success": True,
-        "message": "Dispatched ipc_healthy_demo to QNX target (detached stdio)",
+        "message": "Stopped fault demos and launched healthy non-blocking ipc_healthy_demo IPC loop",
         "stdout": out,
         "stderr": err
     }
@@ -266,7 +279,7 @@ async def trigger_healthy_demo():
 
 @app.post("/api/trigger/crash")
 async def trigger_crash_demo():
-    """Runs slog2 crash demo to emit critical logs and trigger fault."""
+    """Runs slog2 crash demo to emit critical logs, trigger fault, and return an 8-line slog2 preview."""
     if not bridge.is_port_open():
         return JSONResponse(
             status_code=503,
@@ -274,11 +287,13 @@ async def trigger_crash_demo():
         )
     remote_bin = f"{settings.qemu_deploy_dir}/slog2_crash_demo"
     code, out, err = await asyncio.to_thread(bridge.execute_remote, remote_bin, 5)
+    logs = await asyncio.to_thread(bridge.read_slog2, lines=8)
     return {
         "success": True,
-        "message": "Executed slog2_crash_demo",
+        "message": "Executed slog2_crash_demo on QNX 8.0 target and captured latest slog2 buffer entries",
         "stdout": out,
-        "stderr": err
+        "stderr": err,
+        "slog2_preview": logs,
     }
 
 

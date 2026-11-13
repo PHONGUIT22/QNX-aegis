@@ -27,8 +27,8 @@
 
     <div class="zoc-titlebar-right">
       <div id="target-badge" class="zoc-pill zoc-pill-muted">
-        <span class="zoc-dot bg-slate-500"></span>
-        <span>Target: Checking...</span>
+        <span id="target-dot" class="zoc-dot bg-slate-500"></span>
+        <span id="target-badge-text">Target: Checking...</span>
       </div>
 
       <div id="connection-badge" class="zoc-pill zoc-pill-green">
@@ -97,45 +97,60 @@
   <!-- ==================== ZOC BOOKMARK ACTION BAR ==================== -->
   <section class="zoc-bookmark-bar" aria-label="QNX Target Bookmarks">
     <div class="zoc-bookmark-group">
-      <button id="btn-start-qemu" class="zoc-btn zoc-btn-cyan">
+      <button id="btn-start-qemu" class="zoc-btn zoc-btn-cyan" title="Boot QNX Neutrino RTOS 8.0 in QEMU &amp; provision /dev/qnx_inspector">
         <span id="btn-start-qemu-icon">🚀</span>
         <span id="btn-start-qemu-text">Boot QNX 8.0 VM</span>
       </button>
 
-      <button id="btn-trigger-deadlock" class="zoc-btn zoc-btn-red">
-        <span>🟥 Simulate Deadlock</span>
-      </button>
+      <div class="zoc-workflow-group" aria-label="1. Fault Injection">
+        <span class="workflow-group-label">[1. FAULT INJECTION]</span>
+        <button id="btn-trigger-deadlock" class="zoc-btn zoc-btn-red" title="Spawn mutual MsgSend() threads on QNX 8.0 that block each other in a circular wait">
+          <span>🟥 ① Inject IPC Deadlock</span>
+        </button>
+        <button id="btn-trigger-crash" class="zoc-btn zoc-btn-amber" title="Execute slog2_crash_demo on QNX 8.0 to emit critical buffer faults into slog2">
+          <span>🟨 ② Inject Slog2 Fault</span>
+        </button>
+      </div>
 
-      <button id="btn-trigger-healthy" class="zoc-btn zoc-btn-green">
-        <span>🟩 Healthy IPC Demo</span>
-      </button>
+      <div class="zoc-workflow-group" aria-label="2. Kernel Audit and Bench">
+        <span class="workflow-group-label">[2. KERNEL AUDIT &amp; BENCH]</span>
+        <button id="btn-run-detective" class="zoc-btn zoc-btn-purple" title="Run Tarjan's cycle detection &amp; Priority Inversion auditor on live /dev/qnx_inspector threads">
+          <span>🟪 ③ Audit Deadlock &amp; PI</span>
+        </button>
+        <button id="btn-trigger-benchmark" class="zoc-btn zoc-btn-ice" title="Run 1,000 synchronous 64B MsgSend/MsgReceive/MsgReply round-trips measured via CPU ClockCycles()">
+          <span>⏱ ④ ClockCycles() Bench</span>
+        </button>
+      </div>
 
-      <button id="btn-trigger-crash" class="zoc-btn zoc-btn-amber">
-        <span>🟨 Slog2 Crash</span>
-      </button>
-
-      <button id="btn-trigger-benchmark" class="zoc-btn zoc-btn-ice">
-        <span>⏱ ClockCycles Bench</span>
-      </button>
-
-      <button id="btn-run-detective" class="zoc-btn zoc-btn-purple">
-        <span>🟪 Deadlock Detective</span>
-      </button>
-
-      <button id="btn-ai-autofix" class="zoc-btn zoc-btn-patch">
-        <span>🛠 AI Hot-Patch (QCC)</span>
-      </button>
+      <div class="zoc-workflow-group" aria-label="3. AI Remediation and Recovery">
+        <span class="workflow-group-label">[3. AI REMEDIATION &amp; RECOVERY]</span>
+        <button id="btn-ai-autofix" class="zoc-btn zoc-btn-patch" title="Slay deadlocked process, recompile patched C code via QCC on host, deploy via SCP, and launch healthy IPC">
+          <span>🛠 ⑤ AI Hot-Patch (QCC)</span>
+        </button>
+        <button id="btn-trigger-healthy" class="zoc-btn zoc-btn-green" title="Stop fault demos and run non-blocking MsgSend/MsgReceive/MsgReply loop">
+          <span>🟩 ⑥ Run Healthy IPC</span>
+        </button>
+      </div>
     </div>
 
     <div class="zoc-bookmark-group">
-      <button id="btn-reset-layout" class="zoc-btn zoc-btn-blue">
+      <button id="btn-reset-layout" class="zoc-btn zoc-btn-blue" title="Reset and re-fit Cytoscape IPC topology graph">
         <span>🟦 Reset Graph</span>
       </button>
-      <button id="btn-poll-refresh" class="zoc-btn zoc-btn-slate">
+      <button id="btn-poll-refresh" class="zoc-btn zoc-btn-slate" title="Fetch fresh /api/telemetry snapshot and re-run audit now">
         <span>🔄 Sync Now</span>
       </button>
     </div>
   </section>
+
+  <!-- ==================== LIVE COMMAND & ACTION FEEDBACK BAR ==================== -->
+  <div id="action-feedback-bar" class="zoc-feedback-bar">
+    <div class="feedback-left">
+      <span id="feedback-badge" class="feedback-tag tag-idle">READY</span>
+      <span id="feedback-cmd" class="feedback-cmd-text">Select a workflow step above (① Inject Deadlock ➔ ③ Audit ➔ ⑤ AI Hot-Patch) to test live on QNX 8.0.</span>
+    </div>
+    <div id="feedback-right" class="feedback-right"></div>
+  </div>
 
   <!-- ==================== MAIN TERMINAL WORKSPACE ==================== -->
   <main class="zoc-workspace">
