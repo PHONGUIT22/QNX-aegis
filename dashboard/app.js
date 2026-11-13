@@ -1416,8 +1416,26 @@ async function triggerDemo(mode) {
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.detail || data.error || `HTTP ${resp.status}`);
 
-        await fetchTelemetry();
-        const detRes = mode === 'crash' ? null : await runDetective(false);
+        let detRes = null;
+        if (mode === 'deadlock' && data.telemetry) {
+            applyTelemetry(data.telemetry);
+            if (data.deadlock_analysis) {
+                state.latestDetective = data.deadlock_analysis;
+                renderDetectiveResult(data.deadlock_analysis);
+                updateTopologyGraph(data.telemetry, data.deadlock_analysis, false);
+                detRes = data.deadlock_analysis;
+            } else {
+                detRes = await runDetective(false);
+            }
+        } else if (mode === 'crash') {
+            if (data.slog2_preview) {
+                renderSlog2Console(data.slog2_preview, true);
+            }
+            await fetchTelemetry();
+        } else {
+            await fetchTelemetry();
+            detRes = await runDetective(false);
+        }
 
         if (mode === 'deadlock') {
             const cycCnt = detRes?.cycles?.length || 0;
@@ -1436,11 +1454,11 @@ async function triggerDemo(mode) {
             );
         } else if (mode === 'crash') {
             const previewLines = String(data.slog2_preview || '')
-                .split(/\r?\n/)
+                .split(/\r?\n|\s*\|\s*/)
                 .map((l) => l.trim())
                 .filter(Boolean);
             const critLine =
-                [...previewLines].reverse().find((l) => /CRIT|FAULT|SIGSEGV|ERROR|AEGIS/i.test(l)) ||
+                [...previewLines].reverse().find((l) => !/NO CRITICAL/i.test(l) && /CRIT|FAULT|SIGSEGV|ERROR|0XDEADBEEF|AEGIS/i.test(l)) ||
                 previewLines[previewLines.length - 1] ||
                 'slog2_crash_demo emitted buffer fault into /dev/slog2';
 
@@ -1485,7 +1503,10 @@ function renderSlog2Console(slogTail, connected) {
     if (!el) return;
 
     const rawText = slogTail || (connected ? '(slog2info returned empty buffer)' : '[OFFLINE] Waiting for QNX 8.0 SSH telemetry...');
-    const lines = String(rawText).split(/\r?\n/).filter((l, idx, arr) => l.length > 0 || idx < arr.length - 1);
+    const lines = String(rawText)
+        .split(/\r?\n|\s*\|\s*/)
+        .map((l) => l.trimEnd())
+        .filter((l) => l.trim().length > 0);
 
     if (cntEl) cntEl.textContent = `${lines.length} lines`;
 
@@ -1494,14 +1515,15 @@ function renderSlog2Console(slogTail, connected) {
     el.innerHTML = lines
         .map((line) => {
             const upper = line.toUpperCase();
+            const isNoCritical = upper.includes('NO CRITICAL') || upper.includes('NORMAL OPERATION');
             let color = '#d8dee9';
-            if (upper.includes('ERROR') || upper.includes('CRITICAL') || upper.includes('SIGSEGV') || upper.includes('DEADLOCK') || upper.includes('OFFLINE')) {
+            if (!isNoCritical && (upper.includes('ERROR') || upper.includes('CRITICAL') || upper.includes('SIGSEGV') || upper.includes('DEADLOCK') || upper.includes('OFFLINE') || upper.includes('0XDEADBEEF'))) {
                 color = '#bf616a';
             } else if (upper.includes('WARN') || upper.includes('INVERSION')) {
                 color = '#ebcb8b';
-            } else if (upper.includes('BENCHMARK') || upper.includes('HEARTBEAT') || upper.includes('PASS') || upper.includes('HEALTHY')) {
+            } else if (upper.includes('BENCHMARK') || upper.includes('HEARTBEAT') || upper.includes('PASS') || upper.includes('HEALTHY') || isNoCritical) {
                 color = '#a3be8c';
-            } else if (upper.includes('INFO') || upper.includes('[QNX-AEGIS]')) {
+            } else if (upper.includes('INFO') || upper.includes('[QNX-AEGIS]') || upper.includes('SLOG2')) {
                 color = '#88c0d0';
             }
             return `<div style="color:${color};white-space:pre-wrap;word-break:break-word;">${escapeHtml(line)}</div>`;

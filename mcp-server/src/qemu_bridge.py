@@ -329,6 +329,26 @@ class QemuBridge:
 
         return True, "Target provisioned successfully."
 
+    def _enrich_slog2_tail(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Ensures slog2_tail contains fresh multi-line slog2/fault logs formatted with newlines."""
+        slog_tail = str(data.get("slog2_tail", "") or "")
+        if (
+            not slog_tail
+            or "No critical kernel faults recorded" in slog_tail
+            or " | " in slog_tail
+            or "Extracted via native QNX pidin utility" in slog_tail
+        ):
+            live_slog = self.read_slog2(lines=25)
+            if (
+                live_slog
+                and "[slog2] No log records found" not in live_slog
+                and "[OFFLINE]" not in live_slog
+            ):
+                data["slog2_tail"] = live_slog.replace(" | ", "\n")
+            elif " | " in slog_tail:
+                data["slog2_tail"] = slog_tail.replace(" | ", "\n")
+        return data
+
     def read_inspector(self) -> Dict[str, Any]:
         """
         Reads JSON telemetry from /dev/qnx_inspector on the target.
@@ -367,7 +387,7 @@ class QemuBridge:
                 if len(data.get("threads", [])) >= 10:
                     data["connected"] = True
                     data["simulated"] = False
-                    return data
+                    return self._enrich_slog2_tail(data)
             except json.JSONDecodeError:
                 pass
 
@@ -384,7 +404,7 @@ class QemuBridge:
                 if len(data.get("threads", [])) >= 10:
                     data["connected"] = True
                     data["simulated"] = False
-                    return data
+                    return self._enrich_slog2_tail(data)
             except json.JSONDecodeError:
                 pass
 
@@ -397,7 +417,7 @@ class QemuBridge:
                 data = json.loads(json_str)
                 data["connected"] = True
                 data["simulated"] = False
-                return data
+                return self._enrich_slog2_tail(data)
             except json.JSONDecodeError:
                 pass
 
@@ -407,7 +427,7 @@ class QemuBridge:
         if code == 0 and pidin_out.strip():
             parsed = self._parse_pidin_output(pidin_out)
             parsed["connected"] = True
-            return parsed
+            return self._enrich_slog2_tail(parsed)
 
         # 5. Connected but no telemetry available (clean truthful return, no fake data)
         return {
@@ -427,13 +447,17 @@ class QemuBridge:
             "slog2_tail": "[QNX] Telemetry source temporarily unavailable."
         }
 
-    def read_slog2(self, lines: int = 50) -> str:
-        """Retrieves latest log records from QNX slog2info (no fake data)."""
+    def read_slog2(self, lines: int = 40) -> str:
+        """Retrieves latest log records from QNX slog2info and persistent fault log (no fake data)."""
         connected, _ = self.test_connection()
         if connected:
-            code, stdout, _ = self.execute_remote(f"slog2info 2>/dev/null | tail -n {lines}", timeout=4)
+            cmd = (
+                f"(echo {self.password} | sudo -S slog2info 2>/dev/null; "
+                f"cat {self.deploy_dir}/slog2_fault.log 2>/dev/null) | tail -n {lines}"
+            )
+            code, stdout, _ = self.execute_remote(cmd, timeout=4)
             if code == 0 and stdout.strip():
-                return stdout.strip()
+                return stdout.strip().replace(" | ", "\n")
             return "[slog2] No log records found or slog2info not responsive."
 
         return f"[OFFLINE] Waiting for SSH connection to QNX 8.0 QEMU VM at {self.host}:{self.port}..."

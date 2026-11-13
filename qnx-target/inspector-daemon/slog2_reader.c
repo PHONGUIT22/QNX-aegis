@@ -20,25 +20,44 @@ int read_recent_slog2(char *buffer, size_t max_len)
 #ifdef __QNXNTO__
     /*
      * On QNX Neutrino RTOS, slog2info extracts logs from the dynamic
-     * slog2 shared-memory ring buffers. We read the latest lines.
+     * slog2 shared-memory ring buffers. Combine with persistent fault log
+     * and take the latest 20 lines (QNX slog2info does not take -l line count).
      */
-    FILE *fp = popen("slog2info -l 10 2>/dev/null", "r");
+    FILE *fp = popen("(slog2info 2>/dev/null; cat /tmp/qnx-aegis/slog2_fault.log 2>/dev/null) | tail -n 20", "r");
     if (fp != NULL) {
         char line[512];
         size_t current_len = 0;
 
-        while (fgets(line, sizeof(line), fp) != NULL && current_len < max_len - 64) {
-            /* Sanitize control characters and quotes for JSON safety */
-            for (size_t i = 0; line[i] != '\0'; i++) {
-                if (line[i] == '"' || line[i] == '\\') {
+        while (fgets(line, sizeof(line), fp) != NULL && current_len + 16 < max_len) {
+            size_t len = strlen(line);
+            while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
+                line[--len] = '\0';
+            }
+            if (len == 0) {
+                continue;
+            }
+
+            /* Sanitize quotes, backslashes, and control chars for valid JSON string output */
+            for (size_t i = 0; i < len; i++) {
+                unsigned char ch = (unsigned char)line[i];
+                if (ch == '"') {
                     line[i] = '\'';
-                } else if (line[i] == '\r' || line[i] == '\n') {
+                } else if (ch == '\\') {
+                    line[i] = '/';
+                } else if (ch < 0x20) {
                     line[i] = ' ';
                 }
             }
-            int written = snprintf(buffer + current_len, max_len - current_len, "%s | ", line);
+
+            const char *sep = (current_len > 0) ? "\\n" : "";
+            int written = snprintf(buffer + current_len, max_len - current_len, "%s%s", sep, line);
             if (written > 0) {
-                current_len += written;
+                size_t step = (size_t)written;
+                if (current_len + step >= max_len) {
+                    current_len = max_len - 1;
+                    break;
+                }
+                current_len += step;
             }
         }
         pclose(fp);
@@ -56,8 +75,8 @@ int read_recent_slog2(char *buffer, size_t max_len)
 #else
     /* Simulation data for host / mock environments */
     snprintf(buffer, max_len,
-        "[slog2] [INFO] procnto: CPU 0 active, microkernel ready | "
-        "[slog2] [DEBUG] qnx_inspector: Registered on /dev/qnx_inspector | "
+        "[slog2] [INFO] procnto: CPU 0 active, microkernel ready\\n"
+        "[slog2] [DEBUG] qnx_inspector: Registered on /dev/qnx_inspector\\n"
         "[slog2] [INFO] Network stack io-pkt-v6 initialized on en0"
     );
     return 0;
